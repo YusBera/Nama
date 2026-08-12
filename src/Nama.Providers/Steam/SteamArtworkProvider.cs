@@ -99,9 +99,67 @@ public sealed class SteamArtworkProvider(ProviderHttp http) : IArtworkProvider
             });
         }
 
+        await AddStoreBrowseAssetsAsync(appId, artwork, ct).ConfigureAwait(false);
         await AddPublishedAssetsAsync(appId, artwork, ct).ConfigureAwait(false);
 
         return artwork;
+    }
+
+    /// <summary>
+    /// Resolves Valve's newer hashed library assets. Unlike the legacy CDN filenames,
+    /// these paths cannot be derived from an app id; StoreBrowse publishes the format and
+    /// per-asset hash without requiring a user API key.
+    /// </summary>
+    private async Task AddStoreBrowseAssetsAsync(int appId, List<Artwork> artwork, CancellationToken ct)
+    {
+        if (artwork.Any(a => a.Type == ArtworkType.Cover) &&
+            artwork.Any(a => a.Type == ArtworkType.Grid) &&
+            artwork.Any(a => a.Type == ArtworkType.Hero) &&
+            artwork.Any(a => a.Type == ArtworkType.Logo)) return;
+
+        var input = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            ids = new[] { new { appid = appId } },
+            context = new { language = "english", country_code = "US", steam_realm = 1 },
+            data_request = new { include_assets = true },
+        });
+        var endpoint = "https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=" +
+                       Uri.EscapeDataString(input);
+
+        using var document = await http.GetJsonAsync(endpoint, ct: ct).ConfigureAwait(false);
+        if (document is null) return;
+
+        var item = document.RootElement.Prop("response")?.Array("store_items").FirstOrDefault();
+        if (item is null || item.Value.ValueKind != System.Text.Json.JsonValueKind.Object) return;
+        var assets = item.Value.Prop("assets");
+        if (assets is null) return;
+
+        var format = assets.Value.String("asset_url_format");
+        if (string.IsNullOrWhiteSpace(format) || !format.Contains("${FILENAME}", StringComparison.Ordinal)) return;
+
+        AddHashedAsset(artwork, assets.Value, format, "library_capsule_2x", ArtworkType.Cover, 1200, 1800, 0.94);
+        AddHashedAsset(artwork, assets.Value, format, "library_capsule", ArtworkType.Cover, 600, 900, 0.90);
+        AddHashedAsset(artwork, assets.Value, format, "main_capsule_2x", ArtworkType.Grid, 1232, 706, 0.91);
+        AddHashedAsset(artwork, assets.Value, format, "main_capsule", ArtworkType.Grid, 616, 353, 0.88);
+        AddHashedAsset(artwork, assets.Value, format, "library_hero_2x", ArtworkType.Hero, 3840, 1240, 0.94);
+        AddHashedAsset(artwork, assets.Value, format, "library_hero", ArtworkType.Hero, 1920, 620, 0.90);
+        AddHashedAsset(artwork, assets.Value, format, "library_logo_2x", ArtworkType.Logo, 1280, 720, 0.94);
+        AddHashedAsset(artwork, assets.Value, format, "library_logo", ArtworkType.Logo, 640, 360, 0.90);
+    }
+
+    private static void AddHashedAsset(List<Artwork> artwork, System.Text.Json.JsonElement assets,
+        string format, string field, ArtworkType type, int width, int height, double score)
+    {
+        if (artwork.Any(a => a.Type == type) || assets.String(field) is not { Length: > 0 } filename) return;
+
+        var path = format.Replace("${FILENAME}", filename, StringComparison.Ordinal).TrimStart('/');
+        artwork.Add(new Artwork
+        {
+            Id = $"steam-storebrowse-{type}-{field}", Type = type,
+            Url = $"https://shared.akamai.steamstatic.com/store_item_assets/{path}",
+            ThumbnailUrl = $"https://shared.akamai.steamstatic.com/store_item_assets/{path}",
+            Source = Id, Width = width, Height = height, Score = score, Author = "Steam",
+        });
     }
 
     /// <summary>
@@ -114,7 +172,7 @@ public sealed class SteamArtworkProvider(ProviderHttp http) : IArtworkProvider
     /// </summary>
     private async Task AddPublishedAssetsAsync(int appId, List<Artwork> artwork, CancellationToken ct)
     {
-        if (artwork.Any(a => a.Type == ArtworkType.Grid) && artwork.Any(a => a.Type == ArtworkType.Cover)) return;
+        if (artwork.Any(a => a.Type == ArtworkType.Grid)) return;
 
         var url = $"https://store.steampowered.com/api/appdetails?appids={appId}&l=english";
         using var document = await http.GetJsonAsync(url, ct: ct).ConfigureAwait(false);

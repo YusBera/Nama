@@ -159,19 +159,30 @@ public class ProviderMappingTests
               "capsule_image":"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/4108000/5986ba4057fa210d0f96bd470e41a0dd439ed6fb/capsule_231x87.jpg?t=1786561627"
             }}}
             """;
+        const string storeBrowse = """
+            {"response":{"store_items":[{"appid":4108000,"assets":{
+              "asset_url_format":"steam/apps/4108000/${FILENAME}?t=1786561627",
+              "main_capsule":"2e5f2365/capsule_616x353.jpg",
+              "library_capsule":"d7697088/library_capsule.jpg",
+              "library_hero":"bdbc1744/library_hero.jpg"
+            }}]}}
+            """;
 
         var handler = new StubHandler(request =>
             request.Method == HttpMethod.Head
                 ? StubHandler.Status(HttpStatusCode.NotFound)
-                : StubHandler.Json(details));
+                : request.RequestUri!.ToString().Contains("IStoreBrowseService")
+                    ? StubHandler.Json(storeBrowse)
+                    : StubHandler.Json(details));
 
         var artwork = await new SteamArtworkProvider(Transport(handler)).GetArtworkAsync(
             new GameRef([new KeyValuePair<string, string>("steam", "4108000")], "Machine Party"));
 
-        var grid = Assert.Single(artwork);
-        Assert.Equal(ArtworkType.Grid, grid.Type);
-        Assert.Contains("00ae7d0e0fd0ad72635bddb1dd80ee68cc94eed5", grid.Url);
-        Assert.Contains(handler.RequestedUrls, u => u.Contains("api/appdetails"));
+        Assert.Contains(artwork, a => a.Type == ArtworkType.Grid && a.Url.Contains("2e5f2365"));
+        Assert.Contains(artwork, a => a.Type == ArtworkType.Cover && a.Url.Contains("d7697088"));
+        Assert.Contains(artwork, a => a.Type == ArtworkType.Hero && a.Url.Contains("bdbc1744"));
+        Assert.DoesNotContain(artwork, a => a.Type == ArtworkType.Logo);
+        Assert.DoesNotContain(handler.RequestedUrls, u => u.Contains("api/appdetails"));
     }
 
     // Captured from api.vndb.org/kana/vn, filters ["search","=","white album 2"]

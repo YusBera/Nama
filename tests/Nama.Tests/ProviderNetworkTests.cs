@@ -67,6 +67,8 @@ public class ProviderNetworkTests
         Assert.Contains(artwork, a =>
             a.Type == ArtworkType.Grid &&
             a.Url.Contains("store_item_assets/steam/apps/4108000/"));
+        Assert.Contains(artwork, a => a.Type == ArtworkType.Cover);
+        Assert.Contains(artwork, a => a.Type == ArtworkType.Hero);
     }
 
     [Fact]
