@@ -1,0 +1,35 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <!-- A byte-for-byte copy of a real Steam shortcuts.vdf, used to prove the codec
+       round-trips actual user data before any write path is allowed to exist. -->
+  <ItemGroup>
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Nama.Core\Nama.Core.csproj" />
+    <ProjectReference Include="..\..\src\Nama.Steam\Nama.Steam.csproj" />
+    <ProjectReference Include="..\..\src\Nama.Providers\Nama.Providers.csproj" />
+    <ProjectReference Include="..\..\src\Nama.Storage\Nama.Storage.csproj" />
+    <ProjectReference Include="..\..\src\Nama.App\Nama.App.csproj" />
+  </ItemGroup>
+
+</Project>

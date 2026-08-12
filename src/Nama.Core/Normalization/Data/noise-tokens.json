@@ -1,0 +1,54 @@
+{
+  "_comment": "Token classes removed during normalization. All matching is case-insensitive, whole-token, and never applied to the first token so titles like 'PC Building Simulator' survive.",
+
+  "_noiseComment": "Unconditionally dropped: distribution, packaging and platform noise that is never part of a real title.",
+  "noise": [
+    "repack", "rip", "crack", "cracked", "cracks", "cracker", "nodvd", "nocd",
+    "drmfree", "drm-free", "unlocked", "preinstalled", "pre-installed", "portable",
+    "standalone", "installer", "install", "setup", "autorun", "unins000", "readme",
+    "x64", "x86", "x32", "win64", "win32", "win", "pc", "mac", "osx", "linux",
+    "64bit", "32bit", "64-bit", "32-bit", "amd64", "steam", "steamworks",
+    "torrent", "iso", "cracked-only", "fix", "fixed", "hotfix", "patched",
+    "dlc", "dlcs", "alldlc", "alldlcs", "incl", "including", "bonus", "extras",
+    "ost", "soundtrack", "artbook", "artworks", "content", "addon", "addons",
+    "multiplayer", "coop", "online", "offline", "activated", "proper", "readnfo",
+    "final", "fullgame", "fullversion", "gamefiles", "files", "folder",
+    "demo", "trial", "early", "access", "preview", "prerelease",
+    "nfo", "rarbg", "www", "com", "net", "org"
+  ],
+
+  "_languageComment": "Language and region markers. Also matched as glued suffixes on a single-token name (e.g. SubaHibiEN).",
+  "language": [
+    "eng", "en", "english", "jp", "jpn", "jap", "japanese", "kr", "kor", "korean",
+    "cn", "chs", "cht", "chinese", "rus", "ru", "russian", "fr", "fre", "french",
+    "de", "ger", "german", "es", "spa", "spanish", "it", "ita", "italian",
+    "pt", "bra", "multi", "multilang", "multilanguage", "subbed", "dubbed",
+    "translated", "translation", "patch", "tl", "fantl", "mtl"
+  ],
+
+  "_editionComment": "Edition markers are NOT stripped from the primary normalized name — 'The Last of Us Remastered' is a different game from 'The Last of Us'. They instead generate an additional, lower-weighted search candidate with them removed.",
+  "edition": [
+    "goty", "deluxe", "ultimate", "premium", "standard", "gold", "platinum",
+    "collectors", "collector", "anniversary", "legendary", "complete", "definitive",
+    "enhanced", "extended", "digital", "edition", "bundle", "collection", "pack",
+    "uncensored", "uncen", "censored", "adult", "18+", "r18", "allages"
+  ],
+
+  "_versionComment": "Backstop regexes matched against whole tokens, anchored at both ends. Version *phrases* that span separators ('Update 6', 'v2.1') are handled earlier by NameNormalizer's phrase pass; these catch the leftovers.",
+  "versionPatterns": [
+    "v?\\d+(\\.\\d+){1,4}[a-z]?",
+    "v\\d+[a-z]?",
+    "build\\d*",
+    "b\\d{3,}",
+    "r\\d{3,}",
+    "rev\\d*",
+    "update\\d*",
+    "upd\\d*",
+    "hotfix\\d*",
+    "beta\\d*",
+    "alpha\\d*",
+    "multi\\d+",
+    "disc\\d+",
+    "cd\\d+"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "_comment": "Executable stems that carry no title information. When the selected exe matches one of these, the parent folder name is used as the primary candidate instead. Engine runtimes are included because VNs and RPG Maker games almost always ship under an engine's own binary name.",
+
+  "genericNames": [
+    "game", "games", "start", "startup", "launch", "launcher", "play", "run",
+    "main", "app", "application", "bin", "binary", "client", "exe", "program",
+    "setup", "install", "installer", "boot", "loader", "engine", "player"
+  ],
+
+  "_engineComment": "Known engine/runtime executables. Same treatment as generic names.",
+  "engineNames": [
+    "nw", "nwjs", "electron", "love", "java", "javaw", "python", "pythonw",
+    "onscripter", "onscripter-ru", "onscripter-en", "ponscripter",
+    "reallive", "siglusengine", "siglus", "kirikiri", "krkrz", "tvpwin32",
+    "rpgvx", "rpgvxace", "rpgmv", "game_boxed", "nscript", "majiro",
+    "bgi", "bgiruntime", "cs2", "unity", "unityplayer", "ue4game", "ue5game",
+    "renpy", "pygame", "godot", "gzdoom", "scummvm", "dosbox", "wine",
+    "system", "systemc", "advhd", "advplayer", "willplayer", "cmvs32", "cmvs64"
+  ],
+
+  "_buildDirComment": "Directory names that are build output rather than a game title. When the exe's parent is one of these, walk up to the grandparent for the folder candidate.",
+  "buildDirectories": [
+    "bin", "bin64", "binaries", "binary", "win", "win32", "win64", "x64", "x86",
+    "game", "games", "app", "data", "build", "release", "debug", "dist",
+    "system", "engine", "runtime", "redist", "_commonredist", "content"
+  ],
+
+  "_libraryDirComment": "Folders people keep their games *in*. These are never a game title, so they must not become search candidates — otherwise every game in the library contributes the same useless guess. Matched case-insensitively on the whole folder name.",
+  "libraryDirectories": [
+    "games", "game", "pc games", "pc game", "my games", "gaming",
+    "steamlibrary", "steamapps", "common", "program files", "program files (x86)",
+    "programs", "software", "apps", "applications", "downloads", "download",
+    "desktop", "documents", "users", "temp", "tmp", "new folder",
+    "eroge", "vn", "vns", "visual novels", "visualnovels", "novels",
+    "emulation", "emulators", "roms", "repacks", "installed", "library"
+  ]
+}

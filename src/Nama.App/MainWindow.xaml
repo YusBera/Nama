@@ -1,0 +1,98 @@
+<Window x:Class="Nama.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="Nama"
+        Height="660" Width="900"
+        MinHeight="520" MinWidth="720"
+        WindowStartupLocation="CenterScreen"
+        WindowStyle="None"
+        AllowDrop="True"
+        Background="{StaticResource Background}"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="0"
+                            ResizeBorderThickness="6"
+                            CornerRadius="8"
+                            GlassFrameThickness="0" />
+    </shell:WindowChrome.WindowChrome>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header: identity, where you are, and the way back. -->
+        <Border x:Name="TitleBar"
+                Grid.Row="0"
+                Background="{StaticResource Surface}"
+                BorderBrush="{StaticResource Border}"
+                BorderThickness="0,0,0,1"
+                Padding="20,8"
+                MouseLeftButtonDown="OnTitleBarMouseLeftButtonDown">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0"
+                        Content="←"
+                        FontSize="15"
+                        Style="{StaticResource QuietButton}"
+                        Command="{Binding BackCommand}"
+                        Margin="0,0,10,0"
+                        Visibility="{Binding CanGoBack, Converter={StaticResource BoolToVisible}}" />
+
+                <TextBlock Grid.Column="1"
+                           Text="Nama"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Style="{StaticResource Subtle}"
+                               Foreground="{StaticResource TextFaint}"
+                               VerticalAlignment="Center">
+                        <Run Text="Step" />
+                        <Run Text="{Binding StepNumber, Mode=OneWay}" />
+                        <Run Text="of 4" />
+                    </TextBlock>
+
+                    <Button x:Name="SettingsButton"
+                            Content="⚙"
+                            FontSize="15"
+                            Style="{StaticResource QuietButton}"
+                            Margin="12,0,0,0"
+                            ToolTip="Settings"
+                            Click="OnSettingsClick" />
+
+                    <Button Content="—"
+                            Width="34" Height="30"
+                            Margin="10,0,0,0"
+                            Style="{StaticResource QuietButton}"
+                            ToolTip="Minimize"
+                            Click="OnMinimizeClick" />
+                    <Button x:Name="MaximizeButton"
+                            Content="□"
+                            Width="34" Height="30"
+                            Style="{StaticResource QuietButton}"
+                            ToolTip="Maximize"
+                            Click="OnMaximizeClick" />
+                    <Button Content="×"
+                            Width="34" Height="30"
+                            FontSize="17"
+                            Style="{StaticResource QuietButton}"
+                            ToolTip="Close"
+                            Click="OnCloseClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <ContentControl Grid.Row="1" Content="{Binding CurrentStep}" />
+    </Grid>
+</Window>

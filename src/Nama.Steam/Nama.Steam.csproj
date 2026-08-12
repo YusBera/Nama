@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Windows-targeted for registry access. Steam integration is Windows-only by
+         nature, so there is nothing to gain from keeping this portable. Nama.Core
+         stays plain net10.0. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Nama.Steam</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nama.Core\Nama.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The guarded-write primitive is an implementation detail of SteamManager, but its
+       rollback behaviour is the most important thing in the project to test directly. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Nama.Tests" />
+  </ItemGroup>
+
+</Project>

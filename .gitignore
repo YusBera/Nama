@@ -1,0 +1,34 @@
+# .NET build output
+**/bin/
+**/obj/
+artifacts/
+
+# IDE and user state
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Local settings, caches, and secrets
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+settings.json
+
+# Packages and publish output
+*.nupkg
+publish/
+
+# Local development notes
+HANDOFF.md
+PROGRESS.md
+
+# OS files
+Thumbs.db
+.DS_Store
