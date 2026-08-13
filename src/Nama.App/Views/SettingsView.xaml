@@ -74,6 +74,60 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
+                    <!-- NamaDB account link. Voting needs an identity; browsing does not. -->
+                    <TextBlock Text="NAMADB ACCOUNT" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
+
+                    <TextBlock Style="{StaticResource Caption}"
+                               FontSize="11"
+                               Opacity="0.65"
+                               TextWrapping="Wrap"
+                               Text="Link this installation to vote on community artwork. Nama never sees your Steam password — you approve a short code in your browser. Uploading stays on the website." />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                        <Button Content="Link to NamaDB"
+                                Style="{StaticResource GhostButton}"
+                                Padding="10,4"
+                                Command="{Binding LinkNamaDbCommand}"
+                                Visibility="{Binding IsNamaDbLinked, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
+
+                        <Button Content="Cancel"
+                                Style="{StaticResource GhostButton}"
+                                Padding="10,4"
+                                Margin="8,0,0,0"
+                                Command="{Binding CancelNamaDbLinkCommand}"
+                                Visibility="{Binding IsLinking, Converter={StaticResource BoolToVisibility}}" />
+
+                        <Button Content="Unlink"
+                                Style="{StaticResource GhostButton}"
+                                Padding="10,4"
+                                Command="{Binding UnlinkNamaDbCommand}"
+                                Visibility="{Binding IsNamaDbLinked, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+
+                    <!-- The user compares this against the code shown on the verification page. -->
+                    <Border Background="{StaticResource SurfaceOverlay}"
+                            CornerRadius="3"
+                            Padding="12,8"
+                            HorizontalAlignment="Left"
+                            Margin="0,10,0,0"
+                            Visibility="{Binding LinkUserCode, Converter={StaticResource StringToVisibility}}">
+                        <StackPanel>
+                            <TextBlock Text="CONFIRM THIS CODE" Style="{StaticResource Caption}" FontSize="9" Opacity="0.6" />
+                            <TextBlock Text="{Binding LinkUserCode}"
+                                       FontFamily="Consolas"
+                                       FontSize="20"
+                                       Foreground="{StaticResource Accent}" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="{Binding LinkStatus}"
+                               Style="{StaticResource Caption}"
+                               FontSize="11"
+                               Opacity="0.75"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,0"
+                               Visibility="{Binding LinkStatus, Converter={StaticResource StringToVisibility}}" />
+
                     <!-- SteamGridDB key -->
                     <TextBlock Text="STEAMGRIDDB API KEY" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
 

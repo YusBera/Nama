@@ -9,6 +9,18 @@ namespace Nama.Storage;
 /// </summary>
 public sealed class NamaSettings
 {
+    /// <summary>NamaDB is intentionally opt-in because its catalog may contain adult artwork.</summary>
+    public bool NamaDbEnabled { get; set; }
+
+    /// <summary>UTC timestamp of the explicit adult-content confirmation.</summary>
+    public DateTimeOffset? NamaDbAdultAcceptedAt { get; set; }
+
+    /// <summary>Opaque first-party installation identifier issued by NamaDB.</summary>
+    public string? NamaDbInstallationId { get; set; }
+
+    /// <summary>Override for development or self-hosted NamaDB deployments.</summary>
+    public string NamaDbApiBaseUrl { get; set; } = "https://api.namadb.org";
+
     /// <summary>
     /// SteamGridDB API key. Without it the SteamGridDB provider disables itself and Nama
     /// falls back to Steam and VNDB artwork.

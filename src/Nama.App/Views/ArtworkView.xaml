@@ -19,8 +19,60 @@
             </Setter>
         </Style>
 
+        <!-- A vote arrow. Quiet until hovered, and lit while it holds the user's current vote. -->
+        <Style x:Key="VoteButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Padding" Value="4,1" />
+            <Setter Property="Foreground" Value="#FFE6E9F0" />
+            <Setter Property="Opacity" Value="0.6" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="2"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Opacity" Value="1" />
+                    <Setter Property="Background" Value="#26FFFFFF" />
+                </Trigger>
+                <!-- Artwork from providers that do not accept votes still shows its counts. -->
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Cursor" Value="Arrow" />
+                    <Setter Property="Opacity" Value="0.45" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="VoteUpButton" TargetType="Button" BasedOn="{StaticResource VoteButton}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUpvoted}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter Property="Opacity" Value="1" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="VoteDownButton" TargetType="Button" BasedOn="{StaticResource VoteButton}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsDownvoted}" Value="True">
+                    <Setter Property="Foreground" Value="{StaticResource Accent}" />
+                    <Setter Property="Opacity" Value="1" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
         <DataTemplate x:Key="ArtworkTile">
+          <StackPanel Margin="0,0,10,12">
             <Button Style="{StaticResource TileButton}"
+                    Margin="0"
                     Command="{Binding DataContext.SelectCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                     CommandParameter="{Binding}"
                     ToolTip="{Binding Author}">
@@ -94,6 +146,42 @@
                                Margin="2,5,0,0" />
                 </StackPanel>
             </Button>
+
+            <!-- Vote row. Deliberately outside the tile button so pressing an arrow cannot
+                 also change which artwork is selected. -->
+            <StackPanel Orientation="Horizontal"
+                        Margin="0,2,0,0"
+                        Visibility="{Binding HasVotes, Converter={StaticResource BoolToVisibility}}">
+                <Button Style="{StaticResource VoteUpButton}"
+                        Command="{Binding VoteUpCommand}"
+                        IsEnabled="{Binding CanVote}"
+                        ToolTip="Upvote this artwork">
+                    <TextBlock FontSize="10">
+                        <Run Text="&#x25B2;" FontSize="8" />
+                        <Run Text="{Binding Upvotes, Mode=OneWay}" />
+                    </TextBlock>
+                </Button>
+
+                <Button Style="{StaticResource VoteDownButton}"
+                        Command="{Binding VoteDownCommand}"
+                        IsEnabled="{Binding CanVote}"
+                        ToolTip="Downvote this artwork">
+                    <TextBlock FontSize="10">
+                        <Run Text="&#x25BC;" FontSize="8" />
+                        <Run Text="{Binding Downvotes, Mode=OneWay}" />
+                    </TextBlock>
+                </Button>
+            </StackPanel>
+
+            <TextBlock Text="{Binding VoteError}"
+                       Style="{StaticResource Caption}"
+                       FontSize="10"
+                       Foreground="#FFE0777D"
+                       TextWrapping="Wrap"
+                       MaxWidth="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                       Margin="2,2,0,0"
+                       Visibility="{Binding VoteError, Converter={StaticResource StringToVisibility}}" />
+          </StackPanel>
         </DataTemplate>
 
         <!-- One artwork category -->
