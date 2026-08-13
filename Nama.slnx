@@ -1,10 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Nama.App/Nama.App.csproj" />
-    <Project Path="src/Nama.Cli/Nama.Cli.csproj" />
     <Project Path="src/Nama.Core/Nama.Core.csproj" />
     <Project Path="src/Nama.Providers/Nama.Providers.csproj" />
-    <Project Path="src/Nama.Steam/Nama.Steam.csproj" />
+    <Project Path="src/Nama.SteamIntegration/Nama.SteamIntegration.csproj" />
     <Project Path="src/Nama.Storage/Nama.Storage.csproj" />
   </Folder>
   <Folder Name="/tests/">

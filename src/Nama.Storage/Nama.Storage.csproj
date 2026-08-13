@@ -1,22 +1,13 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <PropertyGroup>
-    <!-- Windows-targeted for DPAPI, which is how the SteamGridDB key is protected. -->
-    <TargetFramework>net10.0-windows</TargetFramework>
-    <RootNamespace>Nama.Storage</RootNamespace>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <!-- Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11 transitively, which carries
-         a high-severity advisory (GHSA-2m69-gcr7-jv3q). Referencing the Core package plus
-         a current bundle explicitly pins past it. -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.0" />
-    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
-  </ItemGroup>
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\Nama.Core\Nama.Core.csproj" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
 
 </Project>

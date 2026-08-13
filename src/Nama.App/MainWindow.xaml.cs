@@ -1,103 +1,74 @@
 using System.Windows;
-using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using Nama.App.ViewModels;
 
 namespace Nama.App;
 
+/// <summary>
+/// The application shell. Owns the custom title bar and forwards window-level drag and
+/// drop to whichever step is currently showing.
+/// </summary>
 public partial class MainWindow : Window
 {
-    private readonly ShellViewModel _shell;
-
-    public MainWindow(ShellViewModel shell)
+    public MainWindow()
     {
-        _shell = shell;
-        DataContext = shell;
-
         InitializeComponent();
-
-        // Drag and drop is handled here rather than in the view model: it is a
-        // presentation concern, and the view model only ever sees a path.
-        DragEnter += OnDragEnter;
-        DragLeave += OnDragLeave;
-        Drop += OnDrop;
-        StateChanged += (_, _) => MaximizeButton.Content = WindowState == WindowState.Maximized ? "❐" : "□";
     }
 
-    private void OnTitleBarMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        // Buttons live inside the title bar; they must remain clickable rather than starting a drag.
-        if (e.OriginalSource is DependencyObject source && FindParent<ButtonBase>(source) is not null) return;
+    private ShellViewModel? Shell => DataContext as ShellViewModel;
 
+    private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
+    {
         if (e.ClickCount == 2)
         {
-            ToggleMaximize();
+            WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
             return;
         }
 
-        if (e.LeftButton == MouseButtonState.Pressed) DragMove();
+        // DragMove throws if the button was released between the event and this call,
+        // which happens with fast clicks.
+        try
+        {
+            DragMove();
+        }
+        catch (InvalidOperationException)
+        {
+        }
     }
 
-    private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
+    private void OnMinimize(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
-    private void OnMaximizeClick(object sender, RoutedEventArgs e) => ToggleMaximize();
-
-    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
-
-    private void ToggleMaximize() =>
+    private void OnMaximize(object sender, RoutedEventArgs e) =>
         WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
 
-    private static T? FindParent<T>(DependencyObject? child) where T : DependencyObject
-    {
-        while (child is not null)
-        {
-            if (child is T match) return match;
-            child = System.Windows.Media.VisualTreeHelper.GetParent(child);
-        }
-
-        return null;
-    }
-
-    private void OnDragEnter(object sender, DragEventArgs e)
-    {
-        var accepted = TryGetPath(e) is not null;
-
-        e.Effects = accepted ? DragDropEffects.Copy : DragDropEffects.None;
-        e.Handled = true;
-
-        if (accepted) _shell.SelectStep.IsDragOver = true;
-    }
-
-    private void OnDragLeave(object sender, DragEventArgs e) => _shell.SelectStep.IsDragOver = false;
+    private void OnClose(object sender, RoutedEventArgs e) => Close();
 
     /// <summary>
-    /// Opening a window is a view concern, so it lives here rather than in a view model.
+    /// Dropping is accepted anywhere in the window, but only acted on while the
+    /// selection step is showing — dropping a file mid-flow would be ambiguous.
     /// </summary>
-    private void OnSettingsClick(object sender, RoutedEventArgs e) => OpenSettings();
-
-    /// <summary>Also reachable directly via <c>Nama.exe --settings</c>.</summary>
-    public void OpenSettings()
+    private void OnWindowDrop(object sender, DragEventArgs e)
     {
-        var settings = new SettingsWindow(new SettingsViewModel(_shell.Services)) { Owner = this };
+        if (Shell?.CurrentPage is not SelectViewModel select) return;
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
 
-        settings.ShowDialog();
-    }
-
-    private async void OnDrop(object sender, DragEventArgs e)
-    {
-        _shell.SelectStep.IsDragOver = false;
-
-        if (TryGetPath(e) is not { } path) return;
-
+        select.HandleDrop(e.Data.GetData(DataFormats.FileDrop) as string[]);
         e.Handled = true;
-        await _shell.SelectStep.DropAsync(path);
     }
 
-    /// <summary>Accepts a dropped file or folder, ignoring multi-selections beyond the first.</summary>
-    private static string? TryGetPath(DragEventArgs e)
+    private void OnWindowDragOver(object sender, DragEventArgs e)
     {
-        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return null;
+        var isSelectStep = Shell?.CurrentPage is SelectViewModel;
+        var hasFiles = e.Data.GetDataPresent(DataFormats.FileDrop);
 
-        return e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths ? paths[0] : null;
+        e.Effects = isSelectStep && hasFiles ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+
+        if (Shell?.CurrentPage is SelectViewModel select) select.IsDragOver = hasFiles;
+    }
+
+    private void OnWindowDragLeave(object sender, DragEventArgs e)
+    {
+        if (Shell?.CurrentPage is SelectViewModel select) select.IsDragOver = false;
     }
 }

@@ -1,114 +1,124 @@
 using System.IO;
-using System.Runtime.Versioning;
 using Microsoft.Win32;
 
 namespace Nama.App.WindowsIntegration;
 
 /// <summary>
-/// Installs the "Add to Steam with Nama" entry into Explorer's right-click menu.
-/// <para>
-/// Everything is written under <c>HKEY_CURRENT_USER</c>, so no elevation is needed and
-/// uninstalling is a clean delete of two keys. The cost of that choice is placement: on
-/// Windows 11 a per-user verb appears under <b>Show more options</b> rather than the top
-/// level. Getting it into the primary menu requires shipping a sparse MSIX package with an
-/// <c>IExplorerCommand</c> handler, which is a much larger change and is deferred.
-/// </para>
+/// Registers Nama's Explorer context-menu entries. Everything is written under
+/// <c>HKEY_CURRENT_USER</c>, so installing needs no elevation and cannot affect other
+/// accounts on the machine.
 /// </summary>
-[SupportedOSPlatform("windows")]
 public static class ContextMenuInstaller
 {
-    private const string KeyName = "Nama";
+    private const string EntryKeyName = "Nama";
+    private const string MenuText = "Add to Steam with Nama";
 
-    private const string VerbLabel = "Add to Steam with Nama";
+    /// <summary>The file and folder classes Nama attaches to.</summary>
+    private static readonly (string ClassPath, string Argument)[] Targets =
+    [
+        // Executables: the primary entry point from the spec.
+        (@"Software\Classes\exefile\shell", "\"%1\""),
 
-    /// <summary>Executable files, and folders (so a game directory can be added directly).</summary>
-    private static readonly string[] TargetClasses = ["exefile", "Directory"];
+        // A folder, right-clicked directly.
+        (@"Software\Classes\Directory\shell", "\"%1\""),
 
-    /// <summary>Path to the running Nama executable.</summary>
-    public static string? ExecutablePath
-    {
-        get
-        {
-            var path = Environment.ProcessPath;
+        // The empty space inside an open folder. %V is the folder being viewed.
+        (@"Software\Classes\Directory\Background\shell", "\"%V\""),
+    ];
 
-            // Under `dotnet run` the host is dotnet.exe, which is not what the menu should
-            // launch. Fall back to the assembly next to it.
-            if (path is not null && !Path.GetFileName(path).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
-            {
-                return path;
-            }
-
-            var assembly = System.Reflection.Assembly.GetEntryAssembly()?.Location;
-            if (string.IsNullOrEmpty(assembly)) return path;
-
-            var candidate = Path.ChangeExtension(assembly, ".exe");
-            return File.Exists(candidate) ? candidate : path;
-        }
-    }
-
+    /// <summary>True when every entry is present and points at the current executable.</summary>
     public static bool IsInstalled()
     {
         try
         {
-            using var key = Registry.CurrentUser.OpenSubKey(KeyPath(TargetClasses[0]));
-            return key is not null;
+            var expected = ExecutablePath();
+
+            foreach (var (classPath, _) in Targets)
+            {
+                using var key = Registry.CurrentUser.OpenSubKey($@"{classPath}\{EntryKeyName}\command");
+                if (key?.GetValue(null) is not string command) return false;
+                if (!command.Contains(expected, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+
+            return true;
         }
-        catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
         {
             return false;
         }
     }
 
     /// <summary>
-    /// Registers the verb. Returns an error message, or null on success.
+    /// Creates or refreshes the context-menu entries.
     /// </summary>
-    public static string? Install()
+    /// <exception cref="InvalidOperationException">The registry could not be written.</exception>
+    public static void Install()
     {
-        var executable = ExecutablePath;
+        var executable = ExecutablePath();
 
-        if (string.IsNullOrEmpty(executable) || !File.Exists(executable))
-        {
-            return "Could not determine where Nama is installed. Build a published copy and run that.";
-        }
+        if (!File.Exists(executable))
+            throw new InvalidOperationException(
+                "Nama could not locate its own executable, so the context menu was not installed.");
 
         try
         {
-            foreach (var className in TargetClasses)
+            foreach (var (classPath, argument) in Targets)
             {
-                using var verb = Registry.CurrentUser.CreateSubKey(KeyPath(className));
-                verb.SetValue("MUIVerb", VerbLabel);
-                verb.SetValue("Icon", $"\"{executable}\",0");
+                using var shell = Registry.CurrentUser.CreateSubKey(classPath, writable: true)
+                    ?? throw new InvalidOperationException($"Could not open {classPath}.");
 
-                using var command = verb.CreateSubKey("command");
-                // %1 is the file or folder the user right-clicked.
-                command.SetValue(string.Empty, $"\"{executable}\" \"%1\"");
+                using var entry = shell.CreateSubKey(EntryKeyName, writable: true);
+                entry.SetValue(null, MenuText, RegistryValueKind.String);
+                entry.SetValue("Icon", $"\"{executable}\",0", RegistryValueKind.String);
+
+                using var command = entry.CreateSubKey("command", writable: true);
+                command.SetValue(null, $"\"{executable}\" {argument}", RegistryValueKind.String);
             }
-
-            return null;
         }
-        catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
         {
-            return $"Could not write to the registry: {e.Message}";
+            throw new InvalidOperationException(
+                "Windows would not let Nama write its context-menu entries.", ex);
         }
     }
 
-    /// <summary>Removes the verb. Returns an error message, or null on success.</summary>
-    public static string? Uninstall()
+    /// <summary>Removes the entries. Missing keys are not an error.</summary>
+    public static void Uninstall()
     {
-        try
+        foreach (var (classPath, _) in Targets)
         {
-            foreach (var className in TargetClasses)
+            try
             {
-                Registry.CurrentUser.DeleteSubKeyTree(KeyPath(className), throwOnMissingSubKey: false);
+                using var shell = Registry.CurrentUser.OpenSubKey(classPath, writable: true);
+                shell?.DeleteSubKeyTree(EntryKeyName, throwOnMissingSubKey: false);
             }
-
-            return null;
-        }
-        catch (Exception e) when (e is UnauthorizedAccessException or System.Security.SecurityException or IOException)
-        {
-            return $"Could not update the registry: {e.Message}";
+            catch (Exception ex) when (ex is System.Security.SecurityException or UnauthorizedAccessException or IOException)
+            {
+                // Leaving a stale entry behind is preferable to failing the settings screen.
+            }
         }
     }
 
-    private static string KeyPath(string className) => $@"Software\Classes\{className}\shell\{KeyName}";
+    /// <summary>
+    /// Path to the running executable. Under <c>dotnet run</c> the process is the host,
+    /// so the app's own path is preferred when it resolves to a real .exe.
+    /// </summary>
+    private static string ExecutablePath()
+    {
+        var path = Environment.ProcessPath;
+
+        if (!string.IsNullOrWhiteSpace(path) &&
+            path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+            !Path.GetFileName(path).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            return path;
+
+        var assembly = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+        if (!string.IsNullOrWhiteSpace(assembly))
+        {
+            var candidate = Path.ChangeExtension(assembly, ".exe");
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        return path ?? string.Empty;
+    }
 }

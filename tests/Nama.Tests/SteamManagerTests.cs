@@ -1,153 +1,284 @@
-using Nama.Steam;
-using Nama.Steam.Models;
-using Nama.Steam.Vdf;
+using System.Text;
+using Nama.Core.Models;
+using Nama.SteamIntegration;
+using Xunit;
 
 namespace Nama.Tests;
 
-public class TextVdfTests
+/// <summary>
+/// Exercises SteamManager against a throwaway directory laid out like a real Steam
+/// userdata folder, so the shortcut and artwork writes are verified end to end.
+/// </summary>
+public sealed class SteamManagerTests : IDisposable
 {
-    /// <summary>Shape and content taken from a real loginusers.vdf.</summary>
-    private const string LoginUsers = """
-        "users"
+    private readonly string _root;
+    private readonly SteamUser _user;
+    private readonly SteamManager _manager;
+
+    public SteamManagerTests()
+    {
+        _root = Path.Combine(Path.GetTempPath(), "nama-tests", Guid.NewGuid().ToString("N"));
+        var config = Path.Combine(_root, "userdata", "12345678", "config");
+        Directory.CreateDirectory(config);
+
+        _user = new SteamUser
         {
-            "76561197960278074"
-            {
-                "AccountName"  "secondary_user"
-                "PersonaName"  "Secondary User"
-                "AutoLogin"    "0"
-                "Timestamp"    "1786540661"
-            }
-            "76561197960265729"
-            {
-                "AccountName"  "primary_user"
-                "PersonaName"  "Primary User"
-                "AutoLogin"    "1"
-                "Timestamp"    "1786547631"
-            }
-        }
-        """;
+            AccountId = "12345678",
+            ConfigPath = config,
+            PersonaName = "Tester",
+        };
 
-    [Fact]
-    public void Parses_nested_objects_and_values()
-    {
-        var root = TextVdf.Parse(LoginUsers);
-        var users = root["users"];
-
-        Assert.NotNull(users);
-        Assert.Equal(2, users.Objects().Count());
-        Assert.Equal("Primary User", users["76561197960265729"]!.GetString("PersonaName"));
-        Assert.Equal(1786547631L, users["76561197960265729"]!.GetInt64("Timestamp"));
+        // Stand-in downloader so no network is involved.
+        _manager = new SteamManager((_, _) => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes("png-bytes")));
     }
 
     [Fact]
-    public void Key_lookup_ignores_case()
+    public void Missing_shortcuts_file_reads_as_an_empty_library()
     {
-        var root = TextVdf.Parse(LoginUsers);
-
-        Assert.NotNull(root["USERS"]);
-        Assert.Equal("secondary_user", root["users"]!["76561197960278074"]!.GetString("accountname"));
+        Assert.Empty(_manager.GetExistingShortcuts(_user));
     }
 
     [Fact]
-    public void Handles_comments_and_escapes()
+    public void Adds_and_reads_back_a_shortcut()
     {
-        var root = TextVdf.Parse("""
-            // leading comment
-            "root"
-            {
-                "path"    "C:\\Games\\Test"   // trailing comment
-                "quoted"  "say \"hi\""
-            }
-            """);
+        var shortcut = SteamShortcut.Create(@"D:\Games\Elden Ring\eldenring.exe", @"D:\Games\Elden Ring", "Elden Ring");
+        _manager.AddShortcut(_user, shortcut, backup: false);
 
-        Assert.Equal(@"C:\Games\Test", root["root"]!.GetString("path"));
-        Assert.Equal("say \"hi\"", root["root"]!.GetString("quoted"));
+        var stored = Assert.Single(_manager.GetExistingShortcuts(_user));
+        Assert.Equal("Elden Ring", stored.AppName);
+        Assert.Equal(@"""D:\Games\Elden Ring\eldenring.exe""", stored.Exe);
+        Assert.Equal(shortcut.AppId, stored.AppId);
     }
 
     [Fact]
-    public void Missing_keys_return_null_rather_than_throwing()
+    public void Adds_multiple_shortcuts_without_overwriting()
     {
-        var root = TextVdf.Parse(LoginUsers);
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\a\a.exe", @"D:\a", "A"), backup: false);
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\b\b.exe", @"D:\b", "B"), backup: false);
 
-        Assert.Null(root["nope"]);
-        Assert.Null(root["users"]!.GetString("nope"));
-        Assert.Null(root["users"]!.GetInt64("nope"));
-    }
-}
-
-public class SteamAccountTests
-{
-    [Fact]
-    public void Converts_between_steamid64_and_the_userdata_folder_name()
-    {
-        Assert.Equal(1u, SteamAccount.ToAccountId(76561197960265729UL));
-        Assert.Equal(76561197960265729UL, SteamAccount.ToSteamId64(1u));
+        var stored = _manager.GetExistingShortcuts(_user);
+        Assert.Equal(2, stored.Count);
+        Assert.Contains(stored, s => s.AppName == "A");
+        Assert.Contains(stored, s => s.AppName == "B");
     }
 
     [Fact]
-    public void Conversion_round_trips()
+    public void Detects_a_duplicate_by_executable_even_when_renamed()
     {
-        foreach (var accountId in new[] { 1u, 123456789u, 1422695769u, uint.MaxValue })
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Old Name"), backup: false);
+
+        var existing = _manager.DetectExistingEntry(_user, @"D:\Games\g.exe", "A Totally Different Name");
+
+        Assert.NotNull(existing);
+        Assert.Equal(DuplicateMatch.SameExecutable, existing!.Value.MatchKind);
+        Assert.Equal("Old Name", existing.Value.Shortcut.AppName);
+    }
+
+    [Fact]
+    public void Detects_a_duplicate_by_name_when_the_target_differs()
+    {
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\one\g.exe", @"D:\one", "Elden Ring"), backup: false);
+
+        var existing = _manager.DetectExistingEntry(_user, @"D:\two\g.exe", "Elden Ring");
+
+        Assert.NotNull(existing);
+        Assert.Equal(DuplicateMatch.SameName, existing!.Value.MatchKind);
+    }
+
+    [Fact]
+    public void Reports_no_duplicate_for_an_unrelated_game()
+    {
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\one\g.exe", @"D:\one", "Elden Ring"), backup: false);
+
+        Assert.Null(_manager.DetectExistingEntry(_user, @"D:\two\h.exe", "Hades"));
+    }
+
+    [Fact]
+    public void Updating_a_renamed_shortcut_replaces_it_rather_than_duplicating()
+    {
+        var original = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Old Name");
+        _manager.AddShortcut(_user, original, backup: false);
+
+        var renamed = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "New Name");
+        _manager.UpdateShortcut(_user, renamed, original.AppId, backup: false);
+
+        var stored = Assert.Single(_manager.GetExistingShortcuts(_user));
+        Assert.Equal("New Name", stored.AppName);
+    }
+
+    [Fact]
+    public void Updating_preserves_play_time_from_the_replaced_entry()
+    {
+        var original = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+        original.LastPlayTime = 1_700_000_000;
+        _manager.AddShortcut(_user, original, backup: false);
+
+        var replacement = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game Renamed");
+        _manager.UpdateShortcut(_user, replacement, original.AppId, backup: false);
+
+        Assert.Equal(1_700_000_000, Assert.Single(_manager.GetExistingShortcuts(_user)).LastPlayTime);
+    }
+
+    [Fact]
+    public void Removes_a_shortcut_and_reindexes_the_rest()
+    {
+        var a = SteamShortcut.Create(@"D:\a\a.exe", @"D:\a", "A");
+        var b = SteamShortcut.Create(@"D:\b\b.exe", @"D:\b", "B");
+        _manager.AddShortcut(_user, a, backup: false);
+        _manager.AddShortcut(_user, b, backup: false);
+
+        Assert.True(_manager.RemoveShortcut(_user, a.AppId, backup: false));
+
+        var stored = Assert.Single(_manager.GetExistingShortcuts(_user));
+        Assert.Equal("B", stored.AppName);
+    }
+
+    [Fact]
+    public void Removing_a_missing_shortcut_reports_false()
+    {
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\a\a.exe", @"D:\a", "A"), backup: false);
+        Assert.False(_manager.RemoveShortcut(_user, 12345, backup: false));
+    }
+
+    [Fact]
+    public void Preserves_unknown_fields_written_by_other_tools()
+    {
+        var shortcut = SteamShortcut.Create(@"D:\a\a.exe", @"D:\a", "A");
+        shortcut.UnknownFields.Add(new KeyValuePair<string, SteamIntegration.Vdf.VdfNode>(
+            "SomeFutureField", SteamIntegration.Vdf.VdfNode.FromString("keep me")));
+
+        _manager.AddShortcut(_user, shortcut, backup: false);
+
+        var stored = Assert.Single(_manager.GetExistingShortcuts(_user));
+        Assert.Contains(stored.UnknownFields, f => f.Key == "SomeFutureField");
+    }
+
+    [Fact]
+    public async Task Applies_artwork_using_Steams_file_naming_scheme()
+    {
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+
+        var selections = new Dictionary<ArtworkType, Artwork>
         {
-            Assert.Equal(accountId, SteamAccount.ToAccountId(SteamAccount.ToSteamId64(accountId)));
-        }
+            [ArtworkType.Grid] = Art(ArtworkType.Grid, "https://example.test/a.png"),
+            [ArtworkType.Cover] = Art(ArtworkType.Cover, "https://example.test/b.png"),
+            [ArtworkType.Hero] = Art(ArtworkType.Hero, "https://example.test/c.png"),
+            [ArtworkType.Logo] = Art(ArtworkType.Logo, "https://example.test/d.png"),
+            [ArtworkType.Icon] = Art(ArtworkType.Icon, "https://example.test/e.png"),
+        };
+
+        var (applied, failed) = await _manager.ApplyArtworkAsync(_user, shortcut, selections);
+
+        Assert.Empty(failed);
+        Assert.Equal(5, applied.Count);
+
+        var id = shortcut.ArtworkId;
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{id}.png")));
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{id}p.png")));
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{id}_hero.png")));
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{id}_logo.png")));
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{id}_icon.png")));
     }
-}
-
-public class DuplicateDetectionTests
-{
-    private static readonly string FixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "shortcuts.real.vdf");
-
-    private static ShortcutsFile Load() => ShortcutsFile.Load(FixturePath);
 
     [Fact]
-    public void Finds_an_existing_entry_by_executable_path()
+    public async Task Applying_an_icon_points_the_shortcut_at_the_written_file()
     {
-        var found = new SteamManager().DetectExistingEntry(
-            Load(),
-            @"C:\GAMES\PC GAMES\Umineko\onscripter-ru.exe");
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
 
-        Assert.NotNull(found);
-        Assert.Equal("Umineko Project", found.AppName);
+        await _manager.ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
+        {
+            [ArtworkType.Icon] = Art(ArtworkType.Icon, "https://example.test/e.png"),
+        });
+
+        Assert.True(File.Exists(shortcut.Icon));
+        Assert.EndsWith("_icon.png", shortcut.Icon);
+    }
+
+    [Fact]
+    public async Task Replacing_artwork_clears_the_previous_file_extension()
+    {
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+
+        await _manager.ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
+        {
+            [ArtworkType.Grid] = Art(ArtworkType.Grid, "https://example.test/a.jpg"),
+        });
+
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{shortcut.ArtworkId}.jpg")));
+
+        await _manager.ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
+        {
+            [ArtworkType.Grid] = Art(ArtworkType.Grid, "https://example.test/a.png"),
+        });
+
+        // A leftover .jpg would win the lookup and show the old artwork.
+        Assert.False(File.Exists(Path.Combine(_user.GridPath, $"{shortcut.ArtworkId}.jpg")));
+        Assert.True(File.Exists(Path.Combine(_user.GridPath, $"{shortcut.ArtworkId}.png")));
+    }
+
+    [Fact]
+    public async Task Reports_artwork_that_could_not_be_downloaded()
+    {
+        var manager = new SteamManager((_, _) => Task.FromResult<byte[]?>(null));
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+
+        var (applied, failed) = await manager.ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
+        {
+            [ArtworkType.Grid] = Art(ArtworkType.Grid, "https://example.test/a.png"),
+        });
+
+        Assert.Empty(applied);
+        Assert.Single(failed);
+    }
+
+    [Fact]
+    public void Writes_a_backup_when_asked()
+    {
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\a\a.exe", @"D:\a", "A"), backup: false);
+        _manager.AddShortcut(_user, SteamShortcut.Create(@"D:\b\b.exe", @"D:\b", "B"), backup: true);
+
+        Assert.True(File.Exists(_user.ShortcutsFile + ".nama.bak"));
+    }
+
+    [Fact]
+    public void Surfaces_a_friendly_error_for_a_corrupt_shortcuts_file()
+    {
+        File.WriteAllBytes(_user.ShortcutsFile, [0x7F, 0x41, 0x42, 0x43]);
+
+        var ex = Assert.Throws<SteamException>(() => _manager.GetExistingShortcuts(_user));
+        Assert.Contains("not in the expected format", ex.Message);
     }
 
     [Theory]
-    // The stored Exe is quoted; the path Nama holds will not be. Casing and trailing
-    // separators vary too. All of these must resolve to the same entry.
-    [InlineData(@"c:\games\pc games\umineko\onscripter-ru.exe")]
-    [InlineData(@"C:\GAMES\PC GAMES\Umineko\..\Umineko\onscripter-ru.exe")]
-    [InlineData("\"C:\\GAMES\\PC GAMES\\Umineko\\onscripter-ru.exe\"")]
-    public void Path_matching_is_insensitive_to_quoting_case_and_form(string path)
+    [InlineData(ArtworkType.Grid, "123.png")]
+    [InlineData(ArtworkType.Cover, "123p.png")]
+    [InlineData(ArtworkType.Hero, "123_hero.png")]
+    [InlineData(ArtworkType.Logo, "123_logo.png")]
+    [InlineData(ArtworkType.Icon, "123_icon.png")]
+    public void Grid_file_names_follow_Steams_conventions(ArtworkType type, string expected)
     {
-        Assert.NotNull(new SteamManager().DetectExistingEntry(Load(), path));
+        Assert.Equal(expected, SteamManager.GridFileName(123u, type, ".png"));
     }
 
-    [Fact]
-    public void Falls_back_to_display_name_when_the_path_differs()
+    private static Artwork Art(ArtworkType type, string url) => new()
     {
-        var found = new SteamManager().DetectExistingEntry(
-            Load(),
-            @"D:\SomewhereElse\game.exe",
-            "Diablo IV");
+        Id = url,
+        Type = type,
+        Url = url,
+        Source = "Test",
+        Width = 600,
+        Height = 900,
+    };
 
-        Assert.NotNull(found);
-        Assert.Equal("Diablo IV", found.AppName);
-    }
-
-    [Fact]
-    public void Returns_null_for_a_game_that_is_not_there()
+    public void Dispose()
     {
-        Assert.Null(new SteamManager().DetectExistingEntry(
-            Load(),
-            @"D:\Games\Nothing\nothing.exe",
-            "Definitely Not Added"));
-    }
-
-    [Fact]
-    public void Matches_a_japanese_display_name()
-    {
-        var found = new SteamManager().DetectExistingEntry(Load(), @"X:\none.exe", "らぶらぼ");
-
-        Assert.NotNull(found);
+        try
+        {
+            if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+        }
+        catch (IOException)
+        {
+            // A leftover temp directory is harmless.
+        }
     }
 }

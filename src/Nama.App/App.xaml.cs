@@ -2,10 +2,13 @@ using System.Windows;
 using System.Windows.Threading;
 using Nama.App.Services;
 using Nama.App.ViewModels;
-using Nama.App.WindowsIntegration;
 
 namespace Nama.App;
 
+/// <summary>
+/// Application entry point. Accepts an optional path argument so the Explorer
+/// context-menu verb can jump straight into identification.
+/// </summary>
 public partial class App : Application
 {
     private AppServices? _services;
@@ -14,63 +17,42 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // A crash in a utility that writes to the Steam library must not be silent.
+        // A crash dialog is friendlier than a silent disappearance, and Nama is a
+        // utility the user launched for one specific task.
         DispatcherUnhandledException += OnUnhandledException;
 
-        // Switches that do one thing and exit, so the context menu can be set up from a
-        // shortcut or a script without opening the app.
-        if (e.Args.Length > 0)
-        {
-            switch (e.Args[0].ToLowerInvariant())
-            {
-                case "--install-context-menu":
-                    ReportAndExit(ContextMenuInstaller.Install(), "Added Nama to the Explorer right-click menu.");
-                    return;
-
-                case "--uninstall-context-menu":
-                    ReportAndExit(ContextMenuInstaller.Uninstall(), "Removed Nama from the Explorer right-click menu.");
-                    return;
-            }
-        }
-
-        _services = AppServices.Create();
+        _services = new AppServices();
 
         var shell = new ShellViewModel(_services);
-        var window = new MainWindow(shell);
+        var window = new MainWindow { DataContext = shell };
 
         MainWindow = window;
         window.Show();
 
-        if (e.Args.Length == 0) return;
-
-        if (e.Args[0].Equals("--settings", StringComparison.OrdinalIgnoreCase))
-        {
-            window.OpenSettings();
-        }
-        else if (!e.Args[0].StartsWith('-'))
-        {
-            // Launched from the context menu or with a path: skip step 1.
-            var path = e.Args[0];
-            window.Dispatcher.InvokeAsync(async () => await shell.StartWithPathAsync(path));
-        }
+        shell.Start(ExtractPath(e.Args));
     }
 
-    private void ReportAndExit(string? error, string successMessage)
+    /// <summary>
+    /// Reads the target path from the command line. Explorer passes it as the first
+    /// argument; quoting and trailing separators vary, so it is normalized here.
+    /// </summary>
+    private static string? ExtractPath(string[] args)
     {
-        MessageBox.Show(
-            error ?? successMessage,
-            "Nama",
-            MessageBoxButton.OK,
-            error is null ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        var candidate = args.FirstOrDefault(a => !a.StartsWith('-') && !a.StartsWith('/'));
+        if (string.IsNullOrWhiteSpace(candidate)) return null;
 
-        Shutdown(error is null ? 0 : 1);
+        var path = candidate.Trim().Trim('"');
+
+        // Directory\Background passes the folder with a trailing separator.
+        if (path.Length > 3 && path.EndsWith('\\')) path = path.TrimEnd('\\');
+
+        return path;
     }
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         MessageBox.Show(
-            $"Nama hit an unexpected error and stopped.\n\n{e.Exception.Message}\n\n" +
-            "Your Steam library has not been modified unless the success screen said so.",
+            $"Nama hit an unexpected error and needs to close.\n\n{e.Exception.Message}",
             "Nama",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
