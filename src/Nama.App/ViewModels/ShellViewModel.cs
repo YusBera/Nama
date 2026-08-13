@@ -1,106 +1,132 @@
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using System.IO;
+using System.Windows.Input;
+using Nama.App.Infrastructure;
 using Nama.App.Services;
 using Nama.Core.Identification;
 using Nama.Core.Models;
+using Nama.SteamIntegration;
 
 namespace Nama.App.ViewModels;
 
 /// <summary>
-/// Owns the four-step flow and the state shared between steps.
-/// <para>
-/// The steps are a straight line — select, identify, artwork, done — because the whole
-/// product claim is that adding a game is one short path with no detours.
-/// </para>
+/// Owns navigation between the four steps of the flow and the settings overlay.
+/// Each step is a separate view model; the shell is the only thing that knows the order.
 /// </summary>
-public sealed partial class ShellViewModel : ObservableObject
+public sealed class ShellViewModel : ObservableObject
 {
+    private readonly AppServices _services;
+    private object? _currentPage;
+    private bool _isSettingsOpen;
+    private string? _banner;
+    private bool _isBannerError;
+
     public ShellViewModel(AppServices services)
     {
-        Services = services;
+        _services = services;
 
-        SelectStep = new SelectViewModel(this);
-        IdentifyStep = new IdentifyViewModel(this);
-        ArtworkStep = new ArtworkViewModel(this);
-        SuccessStep = new SuccessViewModel(this);
+        Settings = new SettingsViewModel(services, CloseSettings);
 
-        CurrentStep = SelectStep;
+        OpenSettingsCommand = RelayCommand.Create(OpenSettings);
+        CloseSettingsCommand = RelayCommand.Create(CloseSettings);
+        DismissBannerCommand = RelayCommand.Create(() => Banner = null);
     }
 
-    public AppServices Services { get; }
-
-    public SelectViewModel SelectStep { get; }
-
-    public IdentifyViewModel IdentifyStep { get; }
-
-    public ArtworkViewModel ArtworkStep { get; }
-
-    public SuccessViewModel SuccessStep { get; }
-
-    [ObservableProperty]
-    private ObservableObject currentStep;
-
-    [ObservableProperty]
-    private int stepNumber = 1;
-
-    /// <summary>Result of reading the selected path. Set once, read by later steps.</summary>
-    public ExtractionResult? Extraction { get; private set; }
-
-    /// <summary>The game the user confirmed.</summary>
-    public GameCandidate? ConfirmedGame { get; private set; }
-
-    public bool CanGoBack => StepNumber is 2 or 3;
-
-    partial void OnStepNumberChanged(int value) => OnPropertyChanged(nameof(CanGoBack));
-
-    /// <summary>Entry point for a path from the file picker, a drop, or the command line.</summary>
-    public async Task StartWithPathAsync(string path)
+    /// <summary>The step currently on screen.</summary>
+    public object? CurrentPage
     {
-        GoTo(IdentifyStep, 2);
-        await IdentifyStep.LoadAsync(path).ConfigureAwait(true);
+        get => _currentPage;
+        private set => SetProperty(ref _currentPage, value);
     }
 
-    public void SetExtraction(ExtractionResult extraction) => Extraction = extraction;
+    public SettingsViewModel Settings { get; }
 
-    public async Task ConfirmGameAsync(GameCandidate game)
+    public bool IsSettingsOpen
     {
-        ConfirmedGame = game;
-        GoTo(ArtworkStep, 3);
-        await ArtworkStep.LoadAsync(game).ConfigureAwait(true);
+        get => _isSettingsOpen;
+        private set => SetProperty(ref _isSettingsOpen, value);
     }
 
-    public void ShowSuccess() => GoTo(SuccessStep, 4);
-
-    [RelayCommand]
-    private void Back()
+    /// <summary>Transient message shown across the top of the window.</summary>
+    public string? Banner
     {
-        switch (StepNumber)
+        get => _banner;
+        private set => SetProperty(ref _banner, value);
+    }
+
+    public bool IsBannerError
+    {
+        get => _isBannerError;
+        private set => SetProperty(ref _isBannerError, value);
+    }
+
+    public ICommand OpenSettingsCommand { get; }
+    public ICommand CloseSettingsCommand { get; }
+    public ICommand DismissBannerCommand { get; }
+
+    /// <summary>
+    /// Entry point. With a path — the context-menu case — Nama goes straight to
+    /// identification; without one it asks the user to pick a game.
+    /// </summary>
+    public void Start(string? path)
+    {
+        if (!string.IsNullOrWhiteSpace(path))
+            ShowIdentify(path!);
+        else
+            ShowSelect();
+    }
+
+    public void ShowSelect() => CurrentPage = new SelectViewModel(this);
+
+    /// <summary>Moves to identification for a chosen executable or folder.</summary>
+    public void ShowIdentify(string path)
+    {
+        try
         {
-            case 2:
-                GoTo(SelectStep, 1);
-                break;
-            case 3:
-                GoTo(IdentifyStep, 2);
-                break;
+            var extractor = new LocalMetadataExtractor();
+            var local = extractor.Extract(path);
+
+            var viewModel = new IdentifyViewModel(_services, this, local);
+            CurrentPage = viewModel;
+            viewModel.BeginIdentification();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or ArgumentException or IOException or UnauthorizedAccessException)
+        {
+            ShowError(ex.Message);
+            ShowSelect();
         }
     }
 
-    /// <summary>Returns to the start so another game can be added without relaunching.</summary>
-    [RelayCommand]
-    public void Reset()
+    public void ShowArtwork(LocalMetadata local, Game game)
     {
-        Extraction = null;
-        ConfirmedGame = null;
-
-        IdentifyStep.Clear();
-        ArtworkStep.Clear();
-
-        GoTo(SelectStep, 1);
+        var viewModel = new ArtworkViewModel(_services, this, local, game);
+        CurrentPage = viewModel;
+        viewModel.BeginLoading();
     }
 
-    private void GoTo(ObservableObject step, int number)
+    public void ShowSuccess(AddGameResult result, LocalMetadata local, Game game) =>
+        CurrentPage = new SuccessViewModel(_services, this, result, local, game);
+
+    public void OpenSettings()
     {
-        CurrentStep = step;
-        StepNumber = number;
+        Settings.Refresh();
+        IsSettingsOpen = true;
     }
+
+    public void CloseSettings() => IsSettingsOpen = false;
+
+    /// <summary>Shows a red banner. Used for failures the user needs to act on.</summary>
+    public void ShowError(string message)
+    {
+        IsBannerError = true;
+        Banner = message;
+    }
+
+    /// <summary>Shows a neutral banner. Used for warnings that do not block the flow.</summary>
+    public void ShowNotice(string message)
+    {
+        IsBannerError = false;
+        Banner = message;
+    }
+
+    public void ClearBanner() => Banner = null;
 }

@@ -1,13 +1,37 @@
 <Application x:Class="Nama.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:infra="clr-namespace:Nama.App.Infrastructure"
+             xmlns:vm="clr-namespace:Nama.App.ViewModels"
+             xmlns:views="clr-namespace:Nama.App.Views">
     <Application.Resources>
         <ResourceDictionary>
-            <!-- Views.xaml merges Theme.xaml itself, so the step templates can resolve
-                 styles and converters at parse time. -->
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Views.xaml" />
+                <ResourceDictionary Source="Theme/Theme.xaml" />
             </ResourceDictionary.MergedDictionaries>
+
+            <infra:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+            <infra:StringToVisibilityConverter x:Key="StringToVisibility" />
+            <infra:NullToVisibilityConverter x:Key="NullToVisibility" />
+            <infra:CountToVisibilityConverter x:Key="CountToVisibility" />
+            <infra:ConfidenceConverter x:Key="Confidence" />
+
+            <!-- Each step's view model resolves to its view automatically. -->
+            <DataTemplate DataType="{x:Type vm:SelectViewModel}">
+                <views:SelectView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type vm:IdentifyViewModel}">
+                <views:IdentifyView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type vm:ArtworkViewModel}">
+                <views:ArtworkView />
+            </DataTemplate>
+
+            <DataTemplate DataType="{x:Type vm:SuccessViewModel}">
+                <views:SuccessView />
+            </DataTemplate>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

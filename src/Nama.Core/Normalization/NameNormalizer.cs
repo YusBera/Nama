@@ -1,280 +1,365 @@
-using System.Text.RegularExpressions;
-using Nama.Core.Models;
+using System.Globalization;
+using System.Text;
 
 namespace Nama.Core.Normalization;
 
 /// <summary>
-/// Turns a raw executable or folder name into searchable titles.
-/// <para>
-/// The pipeline is deliberately <em>additive</em>: every intermediate form is kept as a
-/// lower-weighted candidate rather than discarded, so an over-aggressive rule degrades
-/// the ranking instead of destroying the only usable search term. Normalization is for
-/// identification and display only — it never renames anything on disk.
-/// </para>
+/// Turns a raw file or folder name into a clean title plus a ranked list of search
+/// candidates. This is a product feature, not a helper: identification quality is
+/// bounded by how well this stage works.
+///
+/// The pipeline never destroys the raw input — if cleaning removes everything, the
+/// result falls back to a lightly-tidied version of what came in.
 /// </summary>
-public sealed partial class NameNormalizer
+public sealed class NameNormalizer
 {
-    /// <summary>
-    /// Only these extensions are stripped. A conservative list matters: a blanket
-    /// "remove everything after the last dot" would turn "Steins.Gate" into "Steins".
-    /// </summary>
-    private static readonly HashSet<string> StrippableExtensions = new(StringComparer.OrdinalIgnoreCase)
+    /// <summary>Titles that are legitimately just a noise word, so cleaning must not empty them.</summary>
+    private static readonly HashSet<string> ProtectedTitles = new(StringComparer.OrdinalIgnoreCase)
     {
-        "exe", "lnk", "url", "bat", "cmd", "com", "msi", "app", "swf", "jar",
-        "zip", "rar", "7z", "iso", "tar", "gz", "bin",
+        "portal", "control", "limbo", "inside", "journey", "flow", "gone home", "the witness",
+        "hades", "celeste", "cuphead", "braid", "bastion", "transistor", "firewatch", "prey",
+        "doom", "rage", "dishonored", "fallout", "half-life", "gris", "abzu", "rime", "spore",
+        "free", "steam", "demo", "beta", "patch", "update", "crack", "install", "game",
     };
 
-    private readonly NormalizationData _data;
-
-    public NameNormalizer(NormalizationData? data = null) => _data = data ?? NormalizationData.Default;
-
-    [GeneratedRegex(@"[\s._+~\-–—/\\]+", RegexOptions.CultureInvariant)]
-    private static partial Regex SeparatorPattern { get; }
-
-    [GeneratedRegex(@"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}", RegexOptions.CultureInvariant)]
-    private static partial Regex BracketGroupPattern { get; }
-
     /// <summary>
-    /// Version markers as they actually appear, before tokenization.
-    /// <para>
-    /// This has to run on the un-split string: a version routinely spans what would
-    /// otherwise be separators. Splitting first turns "v2.1" into "v2" and "1", and
-    /// leaves the "6" of "Update 6" stranded as a plausible-looking sequel number.
-    /// </para>
+    /// Normalizes <paramref name="raw"/> into a title and a ranked candidate list.
     /// </summary>
-    [GeneratedRegex(
-        """
-        (?<![A-Za-z0-9])
-        (?:
-            v\d+(?:[._]\d+){0,4}[a-z]?
-          | \d+(?:\.\d+){1,4}[a-z]?
-          | (?:update|build|rev|revision|patch|hotfix|version|ver|beta|alpha)[ ._\-]*\d+(?:\.\d+)*
-          | [rb]\d{4,}
-        )
-        (?![A-Za-z0-9])
-        """,
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.IgnorePatternWhitespace)]
-    private static partial Regex VersionPhrasePattern { get; }
-
-    /// <summary>Runs the full pipeline over one raw name.</summary>
-    public NameAnalysis Normalize(string? raw)
+    public NormalizationResult Normalize(string? raw)
     {
-        raw ??= string.Empty;
-        var removed = new List<string>();
+        if (string.IsNullOrWhiteSpace(raw))
+            return NormalizationResult.Empty;
+
         var input = raw.Trim();
+        var containsCjk = NoisePatterns.Cjk.IsMatch(input);
+        var removed = new List<string>();
 
-        // 1. Extension.
-        var rawStem = StripExtension(input);
-
-        // 2. Bracketed groups: dropped when they contain noise, inlined otherwise.
-        var debracketed = StripBrackets(rawStem, removed, out var bracketVariant);
-
-        // 3-5. Version phrases, then separators, tokens, noise removal.
-        var deversioned = RemoveVersionPhrases(debracketed, removed);
-        var tokens = Tokenize(deversioned);
-        var kept = FilterTokens(tokens, removed, out var withoutEdition);
-        var cleaned = TextTools.Tidy(string.Join(' ', kept));
-
-        // 6. A single glued token carries word boundaries in its casing — use them.
-        string? camelSplit = null;
-        if (kept.Count == 1 && TextTools.HasCamelCaseBoundary(kept[0]))
+        // A title that is entirely CJK is already canonical — cleaning it with
+        // Latin-oriented rules would only damage it.
+        if (containsCjk && IsPredominantlyCjk(input))
         {
-            var splitTokens = FilterTokens(Tokenize(TextTools.SplitCamelCase(kept[0])), removed, out _);
-            camelSplit = TextTools.Tidy(string.Join(' ', splitTokens));
-            if (camelSplit.Length > 0) cleaned = camelSplit;
+            var cjkTitle = CollapseWhitespace(NoisePatterns.Bracketed.Replace(input, " ")).Trim();
+            if (cjkTitle.Length == 0) cjkTitle = input;
+            return new NormalizationResult
+            {
+                Raw = input,
+                Normalized = cjkTitle,
+                Candidates = [cjkTitle],
+                MatchKey = BuildMatchKey(cjkTitle),
+                ContainsCjk = true,
+            };
         }
 
-        // Never let the pipeline trim its way down to nothing.
-        if (cleaned.Length == 0) cleaned = TextTools.Tidy(rawStem);
-        if (cleaned.Length == 0) cleaned = input;
+        var working = input;
 
-        // 7. Known abbreviation or punctuation-stripped title (Steins;Gate, SubaHibi).
-        var expansion = LookupAbbreviation(cleaned) ?? LookupAbbreviation(rawStem);
+        // 1. Strip bracketed segments wholesale — they are almost always tags.
+        working = CaptureAndRemove(working, NoisePatterns.Bracketed, removed);
 
-        var normalized = expansion ?? cleaned;
-        var hasCjk = TextTools.ContainsCjk(input);
+        // 2. Collapse every separator except the dot. Underscores and hyphens are word
+        //    characters to the regex engine, so "Hades_v1.38290" hides the boundary that
+        //    the version pattern needs; dots stay because versions are built from them.
+        working = NoisePatterns.WordSeparators.Replace(working, " ");
 
-        return new NameAnalysis
+        // 3. Remove version strings and update counters while the dots survive.
+        working = CaptureAndRemove(working, NoisePatterns.UpdateCounter, removed);
+        working = CaptureAndRemove(working, NoisePatterns.Version, removed);
+
+        // 4. Now the dots can go too.
+        working = NoisePatterns.Separators.Replace(working, " ");
+        working = NoisePatterns.StrippablePunctuation.Replace(working, " ");
+        working = CollapseWhitespace(working);
+
+        // 5. Drop junk while the tokens are still whole. This has to happen before
+        //    camelCase splitting, which would turn "Win64" into "Win 64" and leave two
+        //    fragments that no longer match anything in the noise lists.
+        //    Leading tokens are kept: a title rarely starts with junk, but often ends with it.
+        var tokens = working.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        tokens = StripJunkTokens(tokens, removed);
+
+        // 6. Split camelCase runs, then strip again to catch junk that the split exposed
+        //    ("SubaHibiEN" only reveals its trailing language tag once separated).
+        working = NoisePatterns.CamelBoundary.Replace(string.Join(' ', tokens), " ");
+        tokens = CollapseWhitespace(working).Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
+        tokens = StripJunkTokens(tokens, removed);
+
+        var cleaned = CollapseWhitespace(string.Join(' ', tokens));
+        var isFallback = false;
+
+        if (cleaned.Length == 0)
         {
-            Raw = raw,
+            // Everything was classified as noise. Fall back to a tidied raw name so the
+            // user still gets something searchable rather than an empty box.
+            cleaned = CollapseWhitespace(
+                NoisePatterns.CamelBoundary.Replace(
+                    NoisePatterns.Separators.Replace(input, " "), " "));
+            isFallback = true;
+        }
+
+        var titled = TitleCase(cleaned);
+
+        // A whole-title abbreviation is the canonical name, not merely a candidate:
+        // "SubaHibiEN" identifies the game far better as "Subarashiki Hibi".
+        var compact = new string(titled.Where(char.IsLetterOrDigit).ToArray());
+        var normalized = NoisePatterns.Abbreviations.TryGetValue(compact, out var expanded)
+            ? expanded
+            : titled;
+
+        // The same title with trailing "Game"/"HD"/"Complete" removed. Kept only as a
+        // search candidate: if the padded form finds nothing, the trimmed one still can.
+        var trimmed = StripTrailingTitlePlausibleWords(titled);
+
+        var candidates = BuildCandidates(normalized, titled, trimmed, input, containsCjk);
+
+        return new NormalizationResult
+        {
+            Raw = input,
             Normalized = normalized,
-            DisplayName = expansion ?? TextTools.ToDisplayCase(cleaned),
-            HasCjk = hasCjk,
+            Candidates = candidates,
+            MatchKey = BuildMatchKey(normalized),
             RemovedTokens = removed,
-            Candidates = BuildCandidates(
-                expansion, cleaned, camelSplit, withoutEdition, bracketVariant, rawStem, input),
+            ContainsCjk = containsCjk,
+            IsFallback = isFallback,
         };
     }
 
-    /// <summary>Convenience overload for the common case of normalizing a file path's name.</summary>
-    public NameAnalysis NormalizeFileName(string path) => Normalize(Path.GetFileName(path));
-
-    // --- pipeline stages -------------------------------------------------------------
-
-    private static string StripExtension(string value)
+    /// <summary>
+    /// Builds the ranked search list: the clean title first, then expansions and
+    /// progressively shorter fallbacks. De-duplicated, order preserved.
+    /// </summary>
+    /// <summary>
+    /// Peels trailing words that are noise in a packaging sense but plausible in a title,
+    /// leaving at least one token. Used only for the alternate search candidate.
+    /// </summary>
+    private static string StripTrailingTitlePlausibleWords(string value)
     {
-        var dot = value.LastIndexOf('.');
-        if (dot <= 0 || dot == value.Length - 1) return value;
+        var tokens = value.Split(' ', StringSplitOptions.RemoveEmptyEntries).ToList();
 
-        var extension = value[(dot + 1)..];
-        return StrippableExtensions.Contains(extension) ? value[..dot] : value;
+        while (tokens.Count > 1 && NoisePatterns.TitlePlausibleWords.Contains(tokens[^1]))
+            tokens.RemoveAt(tokens.Count - 1);
+
+        return string.Join(' ', tokens);
     }
 
-    /// <summary>
-    /// Drops bracket groups whose contents are noise ("[FitGirl Repack]") and inlines the
-    /// rest ("(Director's Cut)"). The all-inlined form is returned separately as a
-    /// fallback candidate in case the noise judgement was wrong.
-    /// </summary>
-    private string StripBrackets(string value, List<string> removed, out string? inlinedVariant)
+    private static IReadOnlyList<string> BuildCandidates(
+        string normalized,
+        string cleaned,
+        string trimmed,
+        string raw,
+        bool containsCjk)
     {
-        inlinedVariant = null;
-        if (!value.Contains('[') && !value.Contains('(') && !value.Contains('{')) return value;
+        var candidates = new List<string>();
 
-        var anyDropped = false;
-
-        var primary = BracketGroupPattern.Replace(value, match =>
+        void Add(string? value)
         {
-            var inner = match.Value[1..^1];
-            var innerTokens = Tokenize(inner);
-            var isNoise = VersionPhrasePattern.IsMatch(inner) ||
-                          innerTokens.Any(t => _data.IsDroppableToken(t) || _data.IsVersionToken(t));
-
-            if (!isNoise) return $" {inner} ";
-
-            anyDropped = true;
-            removed.Add(match.Value);
-            return " ";
-        });
-
-        if (anyDropped)
-        {
-            inlinedVariant = TextTools.Tidy(BracketGroupPattern.Replace(value, m => $" {m.Value[1..^1]} "));
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var trimmed = CollapseWhitespace(value).Trim();
+            if (trimmed.Length < 2) return;
+            if (!candidates.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                candidates.Add(trimmed);
         }
 
-        return primary;
+        Add(normalized);
+
+        // The literal cleaned name, kept as a fallback when an abbreviation was expanded
+        // and the expansion turns out to be wrong.
+        Add(cleaned);
+
+        // The same name without trailing "Game"/"HD"/"Complete", for databases that index
+        // the bare title.
+        Add(trimmed);
+
+        // Per-token abbreviation expansion, e.g. "WA2 Closing Chapter".
+        var tokens = normalized.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length > 1)
+        {
+            var expanded = tokens
+                .Select(t => NoisePatterns.Abbreviations.TryGetValue(t, out var e) ? e : t)
+                .ToArray();
+            var joined = string.Join(' ', expanded);
+            if (!joined.Equals(normalized, StringComparison.OrdinalIgnoreCase))
+                Add(joined);
+        }
+
+        // Subtitle handling: "Game: Subtitle" also searched as just "Game", since providers
+        // frequently index the base title only.
+        var separatorIndex = normalized.IndexOfAny([':', '-', '–', '—']);
+        if (separatorIndex > 2)
+            Add(normalized[..separatorIndex]);
+
+        // Trailing-year removal, e.g. "Doom 2016" -> "Doom".
+        var withoutYear = NoisePatterns.TrailingYear.Replace(normalized, string.Empty);
+        if (withoutYear.Length >= 2)
+            Add(withoutYear);
+
+        // Progressive truncation gives short fallbacks a chance when the tail is unknown noise.
+        if (tokens.Length > 2)
+            Add(string.Join(' ', tokens.Take(tokens.Length - 1)));
+        if (tokens.Length > 3)
+            Add(string.Join(' ', tokens.Take(2)));
+
+        // Keep the raw form around when it contained CJK, so the original-language title
+        // still reaches providers that index it.
+        if (containsCjk)
+            Add(raw);
+
+        return candidates;
     }
 
     /// <summary>
-    /// Strips version markers while the string is still intact, so multi-token forms
-    /// like "Update 6" and dotted forms like "v2.1" are removed whole rather than
-    /// leaving a stray number that reads as a sequel.
+    /// Removes junk tokens from the end inward, then any interior release-group tokens.
+    /// Stops early if removal would empty a protected title.
     /// </summary>
-    private static string RemoveVersionPhrases(string value, List<string> removed)
+    private static List<string> StripJunkTokens(List<string> tokens, List<string> removed)
     {
-        return VersionPhrasePattern.Replace(value, match =>
+        bool IsJunk(string token)
         {
-            removed.Add(match.Value);
-            return " ";
-        });
-    }
+            var key = token.Trim().Trim('\'', '"');
+            if (key.Length == 0) return true;
+            if (NoisePatterns.ReleaseGroups.Contains(key)) return true;
+            if (NoisePatterns.EngineSuffixes.Contains(key)) return true;
 
-    /// <summary>Splits on every separator, including dots.</summary>
-    private static List<string> Tokenize(string value)
-    {
-        var tokens = new List<string>();
+            // Words that double as real title words survive here and are only removed
+            // when building the alternate search candidate.
+            if (NoisePatterns.TitlePlausibleWords.Contains(key)) return false;
 
-        foreach (var token in SeparatorPattern.Split(value))
+            if (NoisePatterns.NoiseWords.Contains(key)) return true;
+            // Bare numbers at the tail are usually build ids. Four digits are far more
+            // likely to be part of the title ("Cyberpunk 2077", "Project 1943"), so only
+            // longer runs count as junk.
+            if (key.Length >= 5 && key.All(char.IsDigit)) return true;
+            return false;
+        }
+
+        // Peel junk off the end.
+        while (tokens.Count > 1 && IsJunk(tokens[^1]))
         {
-            if (token.Length > 0) tokens.Add(token);
+            removed.Add(tokens[^1]);
+            tokens.RemoveAt(tokens.Count - 1);
+        }
+
+        // Remove release groups anywhere, since those are never part of a title.
+        for (var i = tokens.Count - 1; i >= 0; i--)
+        {
+            if (tokens.Count <= 1) break;
+            if (NoisePatterns.ReleaseGroups.Contains(tokens[i]))
+            {
+                removed.Add(tokens[i]);
+                tokens.RemoveAt(i);
+            }
+        }
+
+        // A single surviving token that is itself noise is only dropped when it is not a
+        // real game title ("Portal" and "Control" must survive).
+        if (tokens.Count == 1 &&
+            NoisePatterns.NoiseWords.Contains(tokens[0]) &&
+            !ProtectedTitles.Contains(tokens[0]))
+        {
+            removed.Add(tokens[0]);
+            tokens.Clear();
         }
 
         return tokens;
     }
 
+    private static string CaptureAndRemove(string input, System.Text.RegularExpressions.Regex regex, List<string> removed)
+    {
+        var matches = regex.Matches(input);
+        if (matches.Count == 0) return input;
+
+        foreach (System.Text.RegularExpressions.Match m in matches)
+        {
+            var value = m.Value.Trim();
+            if (value.Length > 0) removed.Add(value);
+        }
+
+        return regex.Replace(input, " ");
+    }
+
     /// <summary>
-    /// Removes version, scene-group, platform and language tokens.
-    /// <para>
-    /// Two guards keep this from eating real titles: the first token is never treated as
-    /// noise (so "PC Building Simulator" and "Final Fantasy" survive), and the list is
-    /// never emptied completely.
-    /// </para>
+    /// Title-cases while preserving tokens that are already meaningfully cased —
+    /// acronyms (<c>XIV</c>), stylized names (<c>NieR</c>) and roman numerals.
+    ///
+    /// Casing is only treated as meaningful when the input is mixed case. Release names
+    /// are routinely SHOUTED in full ("ELDEN RING"), and there the capitalization carries
+    /// no information, so every token is title-cased instead.
     /// </summary>
-    private List<string> FilterTokens(List<string> tokens, List<string> removed, out List<string> withoutEdition)
+    private static string TitleCase(string value)
     {
-        var kept = new List<string>(tokens.Count);
-        var noEdition = new List<string>(tokens.Count);
+        var tokens = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length == 0) return value;
 
-        for (var i = 0; i < tokens.Count; i++)
+        var allLetters = value.Where(char.IsLetter).ToArray();
+        var isShouted = allLetters.Length > 0 && allLetters.All(char.IsUpper);
+
+        var result = new List<string>(tokens.Length);
+        foreach (var token in tokens)
         {
-            var token = tokens[i];
+            var letters = token.Where(char.IsLetter).ToArray();
 
-            // Version tokens are unambiguous enough to strip anywhere.
-            if (_data.IsVersionToken(token))
-            {
-                removed.Add(token);
+            // Short all-caps tokens are acronyms; mixed-case tokens are stylized names.
+            var isAllUpper = letters.Length > 0 && letters.All(char.IsUpper);
+            var hasInnerUpper = token.Length > 1 && token[1..].Any(char.IsUpper);
+
+            if (!isShouted && isAllUpper && letters.Length <= 4)
+                result.Add(token);
+            else if (!isShouted && hasInnerUpper)
+                result.Add(token);
+            else
+                result.Add(char.ToUpper(token[0], CultureInfo.InvariantCulture) + token[1..].ToLowerInvariant());
+        }
+
+        return string.Join(' ', result);
+    }
+
+    /// <summary>
+    /// Reduces a title to a comparison key: lowercase, accent-folded, alphanumeric only.
+    /// Two titles that differ solely in punctuation or spacing produce the same key.
+    /// </summary>
+    public static string BuildMatchKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+
+        var decomposed = value.Normalize(NormalizationForm.FormD);
+        var sb = new StringBuilder(decomposed.Length);
+
+        foreach (var ch in decomposed)
+        {
+            if (CharUnicodeInfo.GetUnicodeCategory(ch) == UnicodeCategory.NonSpacingMark)
                 continue;
-            }
-
-            if (i > 0 && _data.IsDroppableToken(token))
-            {
-                removed.Add(token);
-                continue;
-            }
-
-            kept.Add(token);
-
-            // Edition markers stay in the primary name — "The Last of Us Remastered" is a
-            // different game from "The Last of Us" — but seed a variant without them.
-            if (i == 0 || !_data.Edition.Contains(token)) noEdition.Add(token);
+            if (char.IsLetterOrDigit(ch))
+                sb.Append(char.ToLowerInvariant(ch));
         }
 
-        if (kept.Count == 0 && tokens.Count > 0)
-        {
-            kept.Add(tokens[0]);
-            noEdition.Add(tokens[0]);
-        }
-
-        withoutEdition = noEdition;
-        return kept;
+        return sb.ToString().Normalize(NormalizationForm.FormC);
     }
 
-    private string? LookupAbbreviation(string value)
+    /// <summary>
+    /// Tokenized comparison key used for order-insensitive matching:
+    /// lowercase words, accents folded, sorted, space separated.
+    /// </summary>
+    public static string[] BuildTokens(string? value)
     {
-        var key = TextTools.Compact(value);
-        if (key.Length == 0) return null;
+        if (string.IsNullOrWhiteSpace(value)) return [];
 
-        return _data.Abbreviations.TryGetValue(key, out var expansion) ? expansion : null;
+        var cleaned = NoisePatterns.Separators.Replace(value, " ");
+        cleaned = NoisePatterns.StrippablePunctuation.Replace(cleaned, " ");
+        cleaned = NoisePatterns.CamelBoundary.Replace(cleaned, " ");
+
+        return cleaned
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(t => BuildMatchKey(t))
+            .Where(t => t.Length > 0)
+            .ToArray();
     }
 
-    private static List<NameCandidate> BuildCandidates(
-        string? expansion,
-        string cleaned,
-        string? camelSplit,
-        List<string> withoutEdition,
-        string? bracketVariant,
-        string rawStem,
-        string original)
+    private static bool IsPredominantlyCjk(string value)
     {
-        var candidates = new List<NameCandidate>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        Add(expansion, NameCandidateKind.AbbreviationExpansion, 1.00);
-        Add(cleaned, NameCandidateKind.Normalized, 0.95);
-
-        // Japanese text is preserved verbatim — romanizing it would lose the strongest
-        // signal VNDB has.
-        foreach (var run in TextTools.ExtractCjkRuns(original))
-        {
-            Add(run, NameCandidateKind.Cjk, 0.90);
-        }
-
-        Add(camelSplit, NameCandidateKind.CamelSplit, 0.70);
-        Add(TextTools.Tidy(string.Join(' ', withoutEdition)), NameCandidateKind.Normalized, 0.65);
-        Add(bracketVariant, NameCandidateKind.BracketVariant, 0.60);
-        Add(TextTools.Tidy(rawStem), NameCandidateKind.RawStem, 0.50);
-
-        return candidates;
-
-        void Add(string? value, NameCandidateKind kind, double weight)
-        {
-            if (string.IsNullOrWhiteSpace(value)) return;
-
-            // De-duplicate ignoring case and punctuation so "Steins Gate" and "steins-gate"
-            // do not both consume a provider query.
-            var key = TextTools.Compact(value);
-            if (key.Length == 0 || !seen.Add(key)) return;
-
-            candidates.Add(new NameCandidate(value, kind, weight));
-        }
+        var letters = value.Count(char.IsLetter);
+        if (letters == 0) return false;
+        var cjk = value.Count(c => NoisePatterns.Cjk.IsMatch(c.ToString()));
+        return cjk * 2 >= letters;
     }
+
+    private static string CollapseWhitespace(string value) =>
+        NoisePatterns.ExcessWhitespace.Replace(value.Replace('\t', ' '), " ").Trim();
 }

@@ -1,0 +1,114 @@
+<UserControl x:Class="Nama.App.Views.SuccessView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Margin="40,20,40,40">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="440">
+
+            <Border Width="52" Height="52"
+                    CornerRadius="26"
+                    Background="#33A4D007"
+                    HorizontalAlignment="Center">
+                <TextBlock Text="&#xE73E;"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="20"
+                           Foreground="{StaticResource Success}"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center" />
+            </Border>
+
+            <TextBlock Text="{Binding Headline}"
+                       Style="{StaticResource Display}"
+                       HorizontalAlignment="Center"
+                       Margin="0,18,0,0" />
+
+            <TextBlock Text="{Binding GameName}"
+                       Style="{StaticResource Body}"
+                       Foreground="{StaticResource MutedText}"
+                       HorizontalAlignment="Center"
+                       TextAlignment="Center"
+                       TextWrapping="Wrap"
+                       Margin="0,8,0,0" />
+
+            <!-- Applied artwork -->
+            <Border Background="{StaticResource SurfaceRaised}"
+                    CornerRadius="3"
+                    Padding="20,16"
+                    Margin="0,28,0,0"
+                    Visibility="{Binding HasAppliedArtwork, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel>
+                    <TextBlock Text="ARTWORK APPLIED" Style="{StaticResource SectionLabel}" Margin="0,0,0,10" />
+
+                    <ItemsControl ItemsSource="{Binding AppliedArtwork}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                    <TextBlock Text="&#xE73E;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="11"
+                                               Foreground="{StaticResource Success}"
+                                               VerticalAlignment="Center" />
+                                    <TextBlock Text="{Binding}"
+                                               Style="{StaticResource Body}"
+                                               Margin="10,0,0,0" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- Artwork that could not be written -->
+            <Border Background="#22EC5C5C"
+                    CornerRadius="3"
+                    Padding="20,16"
+                    Margin="0,12,0,0"
+                    Visibility="{Binding HasFailures, Converter={StaticResource BoolToVisibility}}">
+                <StackPanel>
+                    <TextBlock Text="COULD NOT BE APPLIED" Style="{StaticResource SectionLabel}" Margin="0,0,0,8" />
+                    <ItemsControl ItemsSource="{Binding FailedArtwork}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}"
+                                           Style="{StaticResource Caption}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,4" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </Border>
+
+            <!-- Steam restart notice -->
+            <Border Background="{StaticResource SurfaceOverlay}"
+                    CornerRadius="3"
+                    Padding="16,12"
+                    Margin="0,12,0,0"
+                    Visibility="{Binding RequiresSteamRestart, Converter={StaticResource BoolToVisibility}}">
+                <TextBlock Text="{Binding RestartMessage}"
+                           Style="{StaticResource Caption}"
+                           TextWrapping="Wrap" />
+            </Border>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,28,0,0">
+                <Button Content="Done"
+                        Style="{StaticResource SecondaryButton}"
+                        MinWidth="120"
+                        Command="{Binding DoneCommand}" />
+
+                <Button Content="Open Steam"
+                        Style="{StaticResource AccentButton}"
+                        MinWidth="120"
+                        Margin="8,0,0,0"
+                        Command="{Binding OpenSteamCommand}" />
+            </StackPanel>
+
+            <Button Content="Add another game"
+                    Style="{StaticResource GhostButton}"
+                    HorizontalAlignment="Center"
+                    Margin="0,10,0,0"
+                    Command="{Binding AddAnotherCommand}" />
+
+        </StackPanel>
+    </Grid>
+</UserControl>

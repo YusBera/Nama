@@ -1,17 +1,9 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>Nama.Core</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
   </PropertyGroup>
-
-  <!--
-    Normalization rule data is embedded so the library never depends on files sitting
-    next to the binary. A user-supplied override at %APPDATA%\Nama\data\ is merged on
-    top at runtime, which is what keeps the rules editable without a rebuild.
-  -->
-  <ItemGroup>
-    <EmbeddedResource Include="Normalization\Data\*.json" />
-  </ItemGroup>
 
 </Project>

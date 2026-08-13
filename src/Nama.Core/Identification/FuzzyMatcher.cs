@@ -3,108 +3,114 @@ using Nama.Core.Normalization;
 namespace Nama.Core.Identification;
 
 /// <summary>
-/// Similarity between two titles, 0..1.
-/// <para>
-/// Exact string comparison is useless here — the whole problem is that the local name and
-/// the provider's name never match exactly. Two measures are combined because they fail in
-/// opposite directions: Jaro-Winkler handles typos, missing spaces and truncation but is
-/// confused by reordering, while token overlap handles reordering and extra words but
-/// gives nothing for a run-together name like "eldenring". The larger of the two wins.
-/// </para>
+/// String similarity tuned for game titles. Exact string equality is useless here —
+/// "ELDEN-RING-v1.12.2-FITGIRL" and "Elden Ring" must score highly, while
+/// "Elden Ring" and "Elden Ring Nightreign" must stay clearly distinguishable.
 /// </summary>
 public static class FuzzyMatcher
 {
-    /// <summary>Best similarity of two titles, 0..1.</summary>
-    public static double Similarity(string a, string b)
+    /// <summary>
+    /// Similarity in [0,1] between two titles, combining a character-level score
+    /// (typo tolerance) with a token-set score (word order and extra words).
+    /// </summary>
+    public static double Similarity(string? a, string? b)
     {
-        if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) return 0.0;
+        var keyA = NameNormalizer.BuildMatchKey(a);
+        var keyB = NameNormalizer.BuildMatchKey(b);
 
-        // Punctuation-insensitive equality: "Steins;Gate" and "Steins Gate" are the same
-        // title, and filesystems cannot store the semicolon anyway.
-        var compactA = TextTools.Compact(a);
-        var compactB = TextTools.Compact(b);
-        if (compactA.Length == 0 || compactB.Length == 0) return 0.0;
-        if (compactA == compactB) return 1.0;
+        if (keyA.Length == 0 || keyB.Length == 0) return 0;
+        if (keyA == keyB) return 1.0;
 
-        var jaro = JaroWinkler(compactA, compactB);
-        var tokens = TokenOverlap(a, b);
+        var character = JaroWinkler(keyA, keyB);
+        var tokenScore = TokenSetSimilarity(a!, b!);
 
-        var score = Math.Max(jaro, tokens);
+        // Whichever view is more favourable dominates, but the other still pulls the
+        // score, so a good match on both axes beats a good match on only one.
+        var best = Math.Max(character, tokenScore);
+        var other = Math.Min(character, tokenScore);
+        var combined = (best * 0.75) + (other * 0.25);
 
-        // One title fully containing the other is a strong signal that the shorter one is
-        // the same game — "Elden Ring" inside "Elden Ring Shadow of the Erdtree". It is
-        // only a partial match though, so it lifts the floor rather than reaching 1.0.
-        if (compactA.Contains(compactB, StringComparison.Ordinal) ||
-            compactB.Contains(compactA, StringComparison.Ordinal))
+        // Containment bonus: a normalized name that is a clean prefix of the candidate
+        // (or vice versa) is very often the right game.
+        if (keyA.StartsWith(keyB, StringComparison.Ordinal) || keyB.StartsWith(keyA, StringComparison.Ordinal))
         {
-            var ratio = (double)Math.Min(compactA.Length, compactB.Length) / Math.Max(compactA.Length, compactB.Length);
-            score = Math.Max(score, 0.70 + (0.25 * ratio));
+            var ratio = (double)Math.Min(keyA.Length, keyB.Length) / Math.Max(keyA.Length, keyB.Length);
+            combined = Math.Max(combined, 0.70 + (0.28 * ratio));
         }
 
-        return Math.Clamp(score, 0.0, 1.0);
+        return Math.Clamp(combined, 0, 1);
     }
 
-    /// <summary>Best similarity against any of several titles — a game's aliases.</summary>
-    public static double BestSimilarity(string value, IEnumerable<string> alternatives)
+    /// <summary>
+    /// Best similarity between <paramref name="query"/> and any of the candidate's titles.
+    /// Aliases and Japanese titles count exactly as much as the canonical name.
+    /// </summary>
+    public static double BestSimilarity(string query, IEnumerable<string> titles)
     {
         var best = 0.0;
-
-        foreach (var alternative in alternatives)
+        foreach (var title in titles)
         {
-            var score = Similarity(value, alternative);
+            var score = Similarity(query, title);
             if (score > best) best = score;
-            if (best >= 1.0) break;
+            if (best >= 0.999) break;
         }
-
         return best;
     }
 
     /// <summary>
-    /// Dice coefficient over distinct word tokens. Order-insensitive, so it survives
-    /// "Hibi, Subarashiki" and tolerates one side carrying extra words.
+    /// Order-insensitive word overlap, weighted by word length so that matching
+    /// "Ring" counts for less than matching "Nightreign".
     /// </summary>
-    public static double TokenOverlap(string a, string b)
+    public static double TokenSetSimilarity(string a, string b)
     {
-        var tokensA = Tokenize(a);
-        var tokensB = Tokenize(b);
+        var tokensA = NameNormalizer.BuildTokens(a);
+        var tokensB = NameNormalizer.BuildTokens(b);
 
-        if (tokensA.Count == 0 || tokensB.Count == 0) return 0.0;
+        if (tokensA.Length == 0 || tokensB.Length == 0) return 0;
 
-        var shared = tokensA.Count(tokensB.Contains);
+        var setA = new HashSet<string>(tokensA, StringComparer.Ordinal);
+        var setB = new HashSet<string>(tokensB, StringComparer.Ordinal);
 
-        return 2.0 * shared / (tokensA.Count + tokensB.Count);
-    }
+        double Weight(string token) => Math.Sqrt(token.Length);
 
-    private static HashSet<string> Tokenize(string value)
-    {
-        var tokens = new HashSet<string>(StringComparer.Ordinal);
-
-        foreach (var part in value.Split(
-                     [' ', '\t', '-', '_', '.', ':', ';', ',', '!', '?', '/', '\\', '~', '(', ')', '[', ']'],
-                     StringSplitOptions.RemoveEmptyEntries))
+        var intersectionWeight = 0.0;
+        foreach (var token in setA)
         {
-            var token = TextTools.Compact(part);
-            if (token.Length > 0) tokens.Add(token);
+            if (setB.Contains(token))
+            {
+                intersectionWeight += Weight(token);
+                continue;
+            }
+
+            // Near-miss on an individual word (plural, typo, romanization variant).
+            var bestPartial = 0.0;
+            foreach (var other in setB)
+            {
+                var s = JaroWinkler(token, other);
+                if (s > bestPartial) bestPartial = s;
+            }
+            if (bestPartial >= 0.90)
+                intersectionWeight += Weight(token) * bestPartial * 0.8;
         }
 
-        return tokens;
+        var unionWeight = setA.Sum(Weight) + setB.Sum(Weight) - intersectionWeight;
+        return unionWeight <= 0 ? 0 : Math.Clamp(intersectionWeight / unionWeight, 0, 1);
     }
 
     /// <summary>
-    /// Jaro-Winkler similarity. The Winkler prefix bonus matters here: game titles that
-    /// share an opening are usually related, and the one the user picked is far more often
-    /// a prefix match than a suffix match.
+    /// Jaro-Winkler similarity. Chosen over Levenshtein because it rewards a shared
+    /// prefix, which matches how sequels and editions are named.
     /// </summary>
-    public static double JaroWinkler(string a, string b, double prefixScale = 0.1)
+    public static double JaroWinkler(string a, string b)
     {
         var jaro = Jaro(a, b);
-        if (jaro < 0.7) return jaro; // standard threshold: do not boost weak matches
+        if (jaro < 0.7) return jaro;
 
         var prefix = 0;
-        var limit = Math.Min(4, Math.Min(a.Length, b.Length));
-        while (prefix < limit && a[prefix] == b[prefix]) prefix++;
+        var max = Math.Min(4, Math.Min(a.Length, b.Length));
+        while (prefix < max && a[prefix] == b[prefix]) prefix++;
 
-        return jaro + (prefix * prefixScale * (1 - jaro));
+        return jaro + (prefix * 0.1 * (1 - jaro));
     }
 
     public static double Jaro(string a, string b)
@@ -126,7 +132,6 @@ public static class FuzzyMatcher
             for (var j = start; j < end; j++)
             {
                 if (matchedB[j] || a[i] != b[j]) continue;
-
                 matchedA[i] = true;
                 matchedB[j] = true;
                 matches++;
@@ -136,13 +141,11 @@ public static class FuzzyMatcher
 
         if (matches == 0) return 0.0;
 
-        // Transpositions: matched characters that appear in a different order.
         var transpositions = 0;
         var k = 0;
         for (var i = 0; i < a.Length; i++)
         {
             if (!matchedA[i]) continue;
-
             while (!matchedB[k]) k++;
             if (a[i] != b[k]) transpositions++;
             k++;

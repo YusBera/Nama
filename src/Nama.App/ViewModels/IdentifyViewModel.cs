@@ -1,191 +1,261 @@
 using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using System.IO;
+using System.Windows.Input;
+using Nama.App.Infrastructure;
+using Nama.App.Services;
+using Nama.Core.Identification;
 using Nama.Core.Models;
 
 namespace Nama.App.ViewModels;
 
 /// <summary>
-/// Step 2: "What game is this?" — Nama's guess, and the means to correct it.
+/// "What game is this?" — shows Nama's guess, lets the user correct it with a
+/// debounced search, and confirms one candidate.
 /// </summary>
-public sealed partial class IdentifyViewModel(ShellViewModel shell) : ObservableObject
+public sealed class IdentifyViewModel : ObservableObject, IDisposable
 {
+    private readonly AppServices _services;
+    private readonly ShellViewModel _shell;
+    private readonly LocalMetadata _local;
+
+    /// <summary>Cancels the in-flight search when a newer one supersedes it.</summary>
+    private CancellationTokenSource? _searchCts;
+
+    private string _searchText = string.Empty;
+    private bool _isBusy;
+    private bool _hasSearched;
+    private string? _providerWarning;
+    private GameCandidateViewModel? _selectedCandidate;
+
+    public IdentifyViewModel(AppServices services, ShellViewModel shell, LocalMetadata local)
+    {
+        _services = services;
+        _shell = shell;
+        _local = local;
+
+        Normalization = services.Normalizer.Normalize(local.PrimaryRawName);
+        _searchText = Normalization.Normalized;
+
+        BackCommand = RelayCommand.Create(shell.ShowSelect);
+        ConfirmCommand = new RelayCommand(_ => Confirm(), _ => SelectedCandidate is not null);
+        UseTypedNameCommand = RelayCommand.Create(UseTypedName);
+    }
+
+    public ObservableCollection<GameCandidateViewModel> Candidates { get; } = [];
+
+    public Core.Normalization.NormalizationResult Normalization { get; }
+
+    /// <summary>The file the user picked, shown so they can confirm Nama has the right target.</summary>
+    public string SourceFileName => Path.GetFileName(_local.Target.ExecutablePath);
+
+    public string SourceFolder => _local.Target.InstallRoot;
+
+    /// <summary>"ELDEN-RING-v1.12.2-FITGIRL" — what the name was cleaned from.</summary>
+    public string RawName => Normalization.Raw;
+
+    /// <summary>True when cleaning actually changed the name, so the before/after is worth showing.</summary>
+    public bool ShowNormalization =>
+        !string.Equals(Normalization.Raw, Normalization.Normalized, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Debounce for the search box. Long enough that ordinary typing produces one request
-    /// rather than one per keystroke, short enough to feel immediate.
+    /// The search term. Assigning restarts the debounce timer rather than searching
+    /// immediately, so typing does not fire a request per keystroke.
     /// </summary>
-    private static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(300);
-
-    private CancellationTokenSource? _pending;
-
-    /// <summary>Suppresses the debounce while the box is being filled in programmatically.</summary>
-    private bool _suppressSearch;
-
-    public ObservableCollection<GameMatchViewModel> Results { get; } = [];
-
-    [ObservableProperty]
-    private string query = string.Empty;
-
-    [ObservableProperty]
-    private bool isBusy;
-
-    [ObservableProperty]
-    private string? statusMessage;
-
-    [ObservableProperty]
-    private string? errorMessage;
-
-    [ObservableProperty]
-    private GameMatchViewModel? selectedResult;
-
-    [ObservableProperty]
-    private string? sourcePath;
-
-    public bool HasResults => Results.Count > 0;
-
-    public bool CanConfirm => SelectedResult is not null;
-
-    partial void OnSelectedResultChanged(GameMatchViewModel? value)
+    public string SearchText
     {
-        foreach (var result in Results) result.IsSelected = ReferenceEquals(result, value);
-        OnPropertyChanged(nameof(CanConfirm));
+        get => _searchText;
+        set
+        {
+            if (!SetProperty(ref _searchText, value)) return;
+            _ = DebouncedSearchAsync(value);
+        }
     }
 
-    partial void OnQueryChanged(string value)
+    public bool IsBusy
     {
-        if (_suppressSearch) return;
-
-        _ = DebouncedSearchAsync(value);
+        get => _isBusy;
+        private set
+        {
+            if (SetProperty(ref _isBusy, value)) OnPropertyChanged(nameof(ShowEmptyState));
+        }
     }
 
-    /// <summary>Reads the path and runs the first search.</summary>
-    public async Task LoadAsync(string path)
+    /// <summary>Shown when a completed search returned nothing.</summary>
+    public bool ShowEmptyState => !IsBusy && _hasSearched && Candidates.Count == 0;
+
+    /// <summary>Populated when a provider failed, so the user knows the list may be short.</summary>
+    public string? ProviderWarning
+    {
+        get => _providerWarning;
+        private set => SetProperty(ref _providerWarning, value);
+    }
+
+    public GameCandidateViewModel? SelectedCandidate
+    {
+        get => _selectedCandidate;
+        set
+        {
+            var previous = _selectedCandidate;
+            if (!SetProperty(ref _selectedCandidate, value)) return;
+
+            if (previous is not null) previous.IsSelected = false;
+            if (value is not null) value.IsSelected = true;
+
+            (ConfirmCommand as RelayCommand)?.RaiseCanExecuteChanged();
+            OnPropertyChanged(nameof(CanConfirm));
+        }
+    }
+
+    public bool CanConfirm => SelectedCandidate is not null;
+
+    public ICommand BackCommand { get; }
+    public ICommand ConfirmCommand { get; }
+
+    /// <summary>Escape hatch: proceed with exactly what the user typed, matching nothing.</summary>
+    public ICommand UseTypedNameCommand { get; }
+
+    /// <summary>Runs the full identification pipeline for the local target.</summary>
+    public async void BeginIdentification()
     {
         IsBusy = true;
-        ErrorMessage = null;
-        StatusMessage = "Reading files…";
-        SourcePath = path;
-        Results.Clear();
 
         try
         {
-            var result = await Task.Run(() => shell.Services.Identifier.IdentifyAsync(path)).ConfigureAwait(true);
+            var identifier = _services.CreateIdentifier();
+            var result = await identifier.IdentifyAsync(_local).ConfigureAwait(true);
 
-            shell.SetExtraction(result.Extraction);
+            Populate(result.Candidates);
+            ReportFailures(result.Failures.Select(f => (f.Provider, f.Message)));
 
-            _suppressSearch = true;
-            Query = result.Extraction.BestGuess;
-            _suppressSearch = false;
-
-            if (result.Extraction.Warning is not null) ErrorMessage = result.Extraction.Warning;
-
-            Populate(result.Matches);
-
-            StatusMessage = Results.Count == 0
-                ? "No matches found. Try editing the name above."
-                : null;
-
-            if (result.FailedProviders.Count > 0)
-            {
-                StatusMessage = $"Some sources did not respond: {string.Join(", ", result.FailedProviders)}";
-            }
+            // Preselect only when the top match is both strong and clearly ahead, so the
+            // user is never nudged toward a coin-flip guess.
+            if (result.IsConfident && Candidates.Count > 0)
+                SelectedCandidate = Candidates[0];
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            ErrorMessage = $"Could not read '{path}': {e.Message}";
+            _shell.ShowError($"Identification failed: {ex.Message}");
         }
         finally
         {
+            _hasSearched = true;
             IsBusy = false;
         }
     }
 
-    private async Task DebouncedSearchAsync(string text)
+    /// <summary>
+    /// Waits out the debounce interval, then searches — unless another keystroke
+    /// arrives first, which cancels this attempt.
+    /// </summary>
+    private async Task DebouncedSearchAsync(string query)
     {
-        _pending?.Cancel();
-        _pending?.Dispose();
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
 
         var cts = new CancellationTokenSource();
-        _pending = cts;
+        _searchCts = cts;
 
         try
         {
-            await Task.Delay(Debounce, cts.Token).ConfigureAwait(true);
+            await Task.Delay(Math.Clamp(_services.Settings.SearchDebounceMs, 100, 1000), cts.Token)
+                .ConfigureAwait(true);
 
-            if (string.IsNullOrWhiteSpace(text)) return;
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                Candidates.Clear();
+                OnPropertyChanged(nameof(ShowEmptyState));
+                return;
+            }
 
             IsBusy = true;
-            StatusMessage = null;
 
-            var matches = await Task.Run(
-                () => shell.Services.Identifier.SearchAsync(text, cts.Token), cts.Token).ConfigureAwait(true);
+            var identifier = _services.CreateIdentifier();
+            var results = await identifier.SearchAsync(query, cts.Token).ConfigureAwait(true);
 
             if (cts.Token.IsCancellationRequested) return;
 
-            Populate(matches);
-            StatusMessage = Results.Count == 0 ? "No matches for that name." : null;
+            Populate(results);
         }
         catch (OperationCanceledException)
         {
             // Superseded by a newer keystroke.
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            ErrorMessage = e.Message;
+            _shell.ShowError($"Search failed: {ex.Message}");
         }
         finally
         {
-            if (ReferenceEquals(_pending, cts)) IsBusy = false;
+            if (!cts.Token.IsCancellationRequested)
+            {
+                _hasSearched = true;
+                IsBusy = false;
+            }
         }
     }
 
-    private void Populate(IReadOnlyList<GameCandidate> matches)
+    private void Populate(IReadOnlyList<Game> games)
     {
-        Results.Clear();
+        var previouslySelected = SelectedCandidate?.Game.CanonicalName;
 
-        foreach (var match in matches.Take(30))
+        SelectedCandidate = null;
+        Candidates.Clear();
+
+        foreach (var game in games)
         {
-            Results.Add(new GameMatchViewModel(match, shell.Services.Thumbnails));
+            var candidate = new GameCandidateViewModel(game, _services.ImageLoader);
+            Candidates.Add(candidate);
+
+            // Thumbnails load in the background; the list is usable immediately.
+            _ = candidate.EnsureThumbnailAsync();
         }
 
-        // Always pre-select the best match. Confirmation is still required — the user has
-        // to press Continue — but landing on a screen whose primary button is dead, with
-        // no hint that a row must be clicked first, is a worse kind of "confirmation".
-        SelectedResult = Results.FirstOrDefault();
+        // Keep the user's choice across a re-search when the same game is still listed.
+        if (previouslySelected is not null)
+            SelectedCandidate = Candidates.FirstOrDefault(c =>
+                string.Equals(c.Game.CanonicalName, previouslySelected, StringComparison.OrdinalIgnoreCase));
 
-        OnPropertyChanged(nameof(HasResults));
+        OnPropertyChanged(nameof(ShowEmptyState));
     }
 
-    /// <summary>Single click: choose a row without committing to it.</summary>
-    [RelayCommand]
-    private void Select(GameMatchViewModel? result) => SelectedResult = result;
-
-    /// <summary>Double click: choose and move on, since that is the obvious shortcut.</summary>
-    [RelayCommand]
-    private async Task ChooseAsync(GameMatchViewModel? result)
+    private void ReportFailures(IEnumerable<(string Provider, string Message)> failures)
     {
-        if (result is null) return;
+        var list = failures.ToList();
 
-        SelectedResult = result;
-        await shell.ConfirmGameAsync(result.Candidate).ConfigureAwait(true);
+        ProviderWarning = list.Count == 0
+            ? null
+            : $"{string.Join(", ", list.Select(f => f.Provider))} could not be reached, so some matches may be missing.";
     }
 
-    [RelayCommand]
-    private async Task ConfirmAsync()
+    private void Confirm()
     {
-        if (SelectedResult is null) return;
+        if (SelectedCandidate is null) return;
 
-        await shell.ConfirmGameAsync(SelectedResult.Candidate).ConfigureAwait(true);
+        _shell.ClearBanner();
+        _shell.ShowArtwork(_local, SelectedCandidate.Game);
     }
 
-    public void Clear()
+    /// <summary>
+    /// Builds a bare game record from the typed text so a user with an obscure title can
+    /// still add it, picking artwork by name search alone.
+    /// </summary>
+    private void UseTypedName()
     {
-        _pending?.Cancel();
-        Results.Clear();
-        Query = string.Empty;
-        SelectedResult = null;
-        StatusMessage = null;
-        ErrorMessage = null;
-        SourcePath = null;
+        var name = SearchText.Trim();
+        if (name.Length == 0) return;
+
+        _shell.ClearBanner();
+        _shell.ShowArtwork(_local, new Game
+        {
+            CanonicalName = name,
+            DisplayName = name,
+            Confidence = 1.0,
+        });
+    }
+
+    public void Dispose()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
     }
 }

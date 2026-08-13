@@ -1,0 +1,404 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Visual language modelled on the Steam client so Nama reads as a companion to it
+        rather than a foreign window: a desaturated blue-grey surface stack, a single
+        light-blue accent for links and selection, a green button reserved for the one
+        committing action, near-square corners, and small letter-spaced section labels.
+
+        Nothing here is taken from Valve. Colours and layout conventions are not
+        protectable; the marks and assets that are — the Steam logo, wordmark, icons and
+        the proprietary Motiva Sans typeface — are deliberately absent. Type falls back to
+        the system UI font, exactly as Steam itself does when Motiva Sans is unavailable.
+    -->
+
+    <!-- Chrome: the darkest layer, used for the title bar and footer. -->
+    <Color x:Key="ChromeColor">#FF171A21</Color>
+
+    <!-- Page background. -->
+    <Color x:Key="SurfaceColor">#FF1B2838</Color>
+
+    <!-- Panels and cards sitting on the page. -->
+    <Color x:Key="SurfaceRaisedColor">#FF16202D</Color>
+
+    <!-- Hover and inset fills. -->
+    <Color x:Key="SurfaceOverlayColor">#FF223549</Color>
+
+    <!-- Text input wells, darker than the panels they sit in. -->
+    <Color x:Key="WellColor">#FF0E1621</Color>
+
+    <Color x:Key="BorderColor">#FF2A3F55</Color>
+
+    <!-- The signature light blue: links, focus rings, selection. -->
+    <Color x:Key="AccentColor">#FF66C0F4</Color>
+    <Color x:Key="AccentDeepColor">#FF1A9FFF</Color>
+
+    <!-- 20% accent wash, the standard quiet-button fill. -->
+    <Color x:Key="AccentSoftColor">#3366C1F5</Color>
+
+    <Color x:Key="TextColor">#FFC7D5E0</Color>
+    <Color x:Key="BrightTextColor">#FFFFFFFF</Color>
+    <Color x:Key="MutedTextColor">#FF8F98A0</Color>
+
+    <Color x:Key="SuccessColor">#FFA4D007</Color>
+    <Color x:Key="DangerColor">#FFEC5C5C</Color>
+
+    <SolidColorBrush x:Key="Chrome" Color="{StaticResource ChromeColor}" />
+    <SolidColorBrush x:Key="Surface" Color="{StaticResource SurfaceColor}" />
+    <SolidColorBrush x:Key="SurfaceRaised" Color="{StaticResource SurfaceRaisedColor}" />
+    <SolidColorBrush x:Key="SurfaceOverlay" Color="{StaticResource SurfaceOverlayColor}" />
+    <SolidColorBrush x:Key="Well" Color="{StaticResource WellColor}" />
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource BorderColor}" />
+    <SolidColorBrush x:Key="Accent" Color="{StaticResource AccentColor}" />
+    <SolidColorBrush x:Key="AccentDeep" Color="{StaticResource AccentDeepColor}" />
+    <SolidColorBrush x:Key="AccentSoft" Color="{StaticResource AccentSoftColor}" />
+    <SolidColorBrush x:Key="Text" Color="{StaticResource TextColor}" />
+    <SolidColorBrush x:Key="BrightText" Color="{StaticResource BrightTextColor}" />
+    <SolidColorBrush x:Key="MutedText" Color="{StaticResource MutedTextColor}" />
+    <SolidColorBrush x:Key="Success" Color="{StaticResource SuccessColor}" />
+    <SolidColorBrush x:Key="Danger" Color="{StaticResource DangerColor}" />
+
+    <!-- The header's subtle vertical lift. -->
+    <LinearGradientBrush x:Key="ChromeGradient" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF1F242C" Offset="0" />
+        <GradientStop Color="#FF171A21" Offset="1" />
+    </LinearGradientBrush>
+
+    <!-- Committing action. Green is reserved for it and used nowhere else. -->
+    <LinearGradientBrush x:Key="GreenFill" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF8CC421" Offset="0" />
+        <GradientStop Color="#FF5A8110" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="GreenFillHover" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FFA5DF2B" Offset="0" />
+        <GradientStop Color="#FF6E9C15" Offset="1" />
+    </LinearGradientBrush>
+
+    <!-- Forward navigation, distinct from the commit action. -->
+    <LinearGradientBrush x:Key="BlueFill" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF47AFE8" Offset="0" />
+        <GradientStop Color="#FF1F6C9E" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="BlueFillHover" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF66C0F4" Offset="0" />
+        <GradientStop Color="#FF2A85BF" Offset="1" />
+    </LinearGradientBrush>
+
+    <!-- System UI font. Motiva Sans is Valve's and is deliberately not referenced. -->
+    <FontFamily x:Key="UiFont">Segoe UI, Arial, sans-serif</FontFamily>
+    <FontFamily x:Key="DisplayFont">Segoe UI, Arial, sans-serif</FontFamily>
+
+    <!-- Steam keeps corners nearly square; 2px reads as a panel, not a pill. -->
+    <CornerRadius x:Key="PanelRadius">3</CornerRadius>
+    <CornerRadius x:Key="ControlRadius">2</CornerRadius>
+
+    <!-- Typography -->
+    <Style x:Key="Display" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource DisplayFont}" />
+        <Setter Property="FontSize" Value="24" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+    </Style>
+
+    <Style x:Key="Heading" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+    </Style>
+
+    <Style x:Key="Body" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+    </Style>
+
+    <Style x:Key="Caption" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{StaticResource MutedText}" />
+    </Style>
+
+    <!-- Small, wide-tracked, uppercase: Steam's section header treatment. -->
+    <Style x:Key="SectionLabel" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="11" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Foreground" Value="{StaticResource MutedText}" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
+    </Style>
+
+    <!-- Buttons -->
+    <Style x:Key="PrimaryButton" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource GreenFill}" />
+        <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Normal" />
+        <Setter Property="Padding" Value="22,9" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{StaticResource ControlRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource GreenFillHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Opacity" Value="0.8" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Root" Property="Background" Value="#FF2A3F55" />
+                            <Setter Property="Foreground" Value="#FF6B7A88" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Forward navigation ("Continue"). -->
+    <Style x:Key="AccentButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+        <Setter Property="Background" Value="{StaticResource BlueFill}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{StaticResource ControlRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource BlueFillHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Opacity" Value="0.8" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Root" Property="Background" Value="#FF2A3F55" />
+                            <Setter Property="Foreground" Value="#FF6B7A88" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!--
+        The translucent-accent button Steam uses for secondary actions: a 20% blue wash
+        that fills solid on hover and flips the label to dark.
+    -->
+    <Style x:Key="SecondaryButton" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+        <Setter Property="Foreground" Value="{StaticResource Text}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="18,9" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{StaticResource ControlRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource Accent}" />
+                            <Setter Property="Foreground" Value="#FF12222F" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Link-styled button for low-emphasis actions. -->
+    <Style x:Key="GhostButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="10,6" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            CornerRadius="{StaticResource ControlRadius}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource AccentSoft}" />
+                            <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Window caption buttons -->
+    <Style x:Key="CaptionButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource MutedText}" />
+        <Setter Property="FontFamily" Value="Segoe MDL2 Assets" />
+        <Setter Property="FontSize" Value="10" />
+        <Setter Property="Width" Value="44" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="#FF2A3F55" />
+                            <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Text input: a dark well inset into the panel. -->
+    <Style x:Key="Field" TargetType="TextBox">
+        <Setter Property="Background" Value="{StaticResource Well}" />
+        <Setter Property="Foreground" Value="{StaticResource BrightText}" />
+        <Setter Property="CaretBrush" Value="{StaticResource Accent}" />
+        <Setter Property="SelectionBrush" Value="{StaticResource AccentDeep}" />
+        <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Padding" Value="11,9" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="#FF000000" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Root"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="{StaticResource ControlRadius}">
+                        <ScrollViewer x:Name="PART_ContentHost"
+                                      Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{StaticResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Slim scrollbar that does not compete with the artwork -->
+    <Style TargetType="ScrollBar">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Width" Value="8" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="#22000000">
+                        <Track x:Name="PART_Track" IsDirectionReversed="True">
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border Background="#FF3C6E93" CornerRadius="0" Margin="2,0" />
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" />
+                            </Track.IncreaseRepeatButton>
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" />
+                            </Track.DecreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Height" Value="8" />
+                <Setter Property="Width" Value="Auto" />
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Indeterminate progress used while providers are being queried -->
+    <Style x:Key="Spinner" TargetType="ProgressBar">
+        <Setter Property="IsIndeterminate" Value="True" />
+        <Setter Property="Height" Value="2" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{StaticResource Accent}" />
+        <Setter Property="BorderThickness" Value="0" />
+    </Style>
+
+    <!-- Toggle switch for provider rows -->
+    <Style x:Key="Switch" TargetType="CheckBox">
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <Border x:Name="Track"
+                            Width="36" Height="18"
+                            CornerRadius="2"
+                            Background="{StaticResource Well}"
+                            BorderBrush="#FF000000"
+                            BorderThickness="1">
+                        <Border x:Name="Knob"
+                                Width="14" Height="12"
+                                CornerRadius="1"
+                                Background="{StaticResource MutedText}"
+                                HorizontalAlignment="Left"
+                                Margin="2,0,0,0" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="#FF2A5871" />
+                            <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
+                            <Setter TargetName="Knob" Property="Margin" Value="0,0,2,0" />
+                            <Setter TargetName="Knob" Property="Background" Value="{StaticResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+</ResourceDictionary>

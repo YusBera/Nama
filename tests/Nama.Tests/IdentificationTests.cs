@@ -1,337 +1,452 @@
+using Nama.Core.Aggregation;
 using Nama.Core.Identification;
 using Nama.Core.Models;
+using Nama.Core.Providers;
+using Xunit;
 
 namespace Nama.Tests;
 
 public class FuzzyMatcherTests
 {
-    [Theory]
-    [InlineData("Elden Ring", "ELDEN RING")]
-    [InlineData("Steins Gate", "Steins;Gate")]
-    [InlineData("White Album 2", "WHITE ALBUM2")]
-    [InlineData("Nier Automata", "NieR:Automata")]
-    public void Punctuation_and_case_differences_are_exact_matches(string a, string b)
+    [Fact]
+    public void Identical_titles_score_one()
     {
-        Assert.Equal(1.0, FuzzyMatcher.Similarity(a, b));
+        Assert.Equal(1.0, FuzzyMatcher.Similarity("Elden Ring", "Elden Ring"), 3);
     }
 
     [Fact]
-    public void A_run_together_name_still_matches_its_spaced_form()
+    public void Formatting_differences_do_not_reduce_the_score()
     {
-        // Jaro-Winkler carries this; token overlap gives nothing.
-        Assert.True(FuzzyMatcher.Similarity("eldenring", "Elden Ring") > 0.85);
+        Assert.Equal(1.0, FuzzyMatcher.Similarity("elden-ring", "ELDEN RING"), 3);
     }
 
     [Fact]
-    public void Reordered_words_still_match()
+    public void A_sequel_stays_distinguishable_from_the_base_game()
     {
-        // Token overlap carries this; Jaro-Winkler is confused by it.
-        Assert.True(FuzzyMatcher.Similarity("Hibi Subarashiki", "Subarashiki Hibi") > 0.85);
-    }
+        var exact = FuzzyMatcher.Similarity("Elden Ring", "Elden Ring");
+        var sequel = FuzzyMatcher.Similarity("Elden Ring", "Elden Ring Nightreign");
 
-    [Fact]
-    public void A_containing_title_scores_high_but_not_perfect()
-    {
-        var score = FuzzyMatcher.Similarity("Elden Ring", "ELDEN RING Shadow of the Erdtree");
-
-        Assert.InRange(score, 0.70, 0.95);
-    }
-
-    [Fact]
-    public void The_exact_title_beats_a_longer_one_containing_it()
-    {
-        var exact = FuzzyMatcher.Similarity("Elden Ring", "ELDEN RING");
-        var extended = FuzzyMatcher.Similarity("Elden Ring", "ELDEN RING NIGHTREIGN");
-
-        Assert.True(exact > extended);
+        // The sequel must still look related, but never as good as the exact match.
+        Assert.True(sequel < exact);
+        Assert.True(sequel > 0.5, $"expected some similarity, got {sequel}");
     }
 
     [Fact]
     public void Unrelated_titles_score_low()
     {
-        Assert.True(FuzzyMatcher.Similarity("Elden Ring", "Football Manager 2024") < 0.5);
-        Assert.True(FuzzyMatcher.Similarity("Subarashiki Hibi", "Diablo IV") < 0.5);
+        Assert.True(FuzzyMatcher.Similarity("Elden Ring", "Stardew Valley") < 0.4);
+    }
+
+    [Fact]
+    public void Word_order_does_not_matter_much()
+    {
+        Assert.True(FuzzyMatcher.TokenSetSimilarity("Zero Dawn Horizon", "Horizon Zero Dawn") > 0.9);
     }
 
     [Fact]
     public void Best_similarity_picks_the_strongest_alias()
     {
-        var score = FuzzyMatcher.BestSimilarity(
-            "素晴らしき日々",
-            ["Subarashiki Hibi", "Wonderful Everyday", "素晴らしき日々～不連続存在～"]);
+        var score = FuzzyMatcher.BestSimilarity("Subarashiki Hibi",
+            ["Wonderful Everyday", "素晴らしき日々", "Subarashiki Hibi"]);
 
-        Assert.True(score > 0.8);
+        Assert.Equal(1.0, score, 3);
     }
 
     [Fact]
-    public void Empty_input_scores_zero_and_does_not_throw()
+    public void Empty_input_scores_zero()
     {
-        Assert.Equal(0.0, FuzzyMatcher.Similarity("", "Elden Ring"));
-        Assert.Equal(0.0, FuzzyMatcher.Similarity("Elden Ring", "   "));
+        Assert.Equal(0, FuzzyMatcher.Similarity("", "Elden Ring"));
+        Assert.Equal(0, FuzzyMatcher.Similarity(null, null));
     }
 
     [Fact]
-    public void Scores_stay_in_range()
+    public void Jaro_winkler_rewards_a_shared_prefix()
     {
-        foreach (var (a, b) in new[] { ("a", "b"), ("", ""), ("Elden Ring", "Elden Ring"), ("x", "xxxxxxxxxxxx") })
-        {
-            Assert.InRange(FuzzyMatcher.Similarity(a, b), 0.0, 1.0);
-        }
+        Assert.True(FuzzyMatcher.JaroWinkler("martha", "marhta") > 0.95);
     }
 }
 
-public class CandidateExtractorTests : IDisposable
+public class GameIdentifierTests
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), $"nama-extract-{Guid.NewGuid():N}");
-
-    private readonly CandidateExtractor _extractor = new();
-
-    public void Dispose()
+    [Fact]
+    public async Task Ranks_the_correct_game_first_for_a_repack_name()
     {
-        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
-    }
+        var provider = new StubGameProvider("stub",
+        [
+            Game("Elden Ring Nightreign"),
+            Game("Elden Ring"),
+            Game("Stardew Valley"),
+        ]);
 
-    private string MakeGame(string folder, string executable, int sizeBytes = 4096)
-    {
-        var directory = Path.Combine(_root, folder);
-        Directory.CreateDirectory(directory);
+        var identifier = new GameIdentifier([provider]);
+        var result = await identifier.IdentifyAsync(FakeLocal("ELDEN-RING-v1.12.2-FITGIRL"));
 
-        var path = Path.Combine(directory, executable);
-        File.WriteAllBytes(path, new byte[sizeBytes]);
-
-        return path;
+        Assert.Equal("Elden Ring", result.Candidates[0].CanonicalName);
+        Assert.NotNull(result.BestMatch);
     }
 
     [Fact]
-    public void A_meaningful_executable_name_outranks_the_folder()
+    public async Task Merges_the_same_game_reported_by_two_providers()
     {
-        var exe = MakeGame("Some Repack Folder", "Hollow Knight.exe");
+        var steam = new StubGameProvider("steam", [Game("Elden Ring")]);
+        var vndb = new StubGameProvider("vndb", [Game("elden ring")]);
 
-        var result = _extractor.Extract(exe);
+        var identifier = new GameIdentifier([steam, vndb]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Elden Ring"));
 
-        Assert.False(result.ExecutableNameWasGeneric);
-        Assert.Equal(CandidateOrigin.ExecutableName, result.Candidates[0].Origin);
+        var top = result.Candidates[0];
+        Assert.Equal(2, top.SourceIds.Count);
+        Assert.NotNull(top.SourceFor("steam"));
+        Assert.NotNull(top.SourceFor("vndb"));
     }
 
     [Fact]
-    public void A_dlsite_code_in_a_nearby_filename_becomes_the_strongest_candidate()
+    public async Task A_failing_provider_does_not_break_the_search()
     {
-        var exe = MakeGame("Translated Game Folder", "game.exe");
-        File.WriteAllText(Path.Combine(Path.GetDirectoryName(exe)!, "RJ01234567_readme.txt"), "");
+        var good = new StubGameProvider("good", [Game("Elden Ring")]);
+        var bad = new ThrowingGameProvider();
 
-        var result = _extractor.Extract(exe);
+        var identifier = new GameIdentifier([good, bad]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Elden Ring"));
 
-        Assert.Equal("RJ01234567", result.Candidates[0].Value);
-        Assert.Equal(CandidateOrigin.SiblingFile, result.Candidates[0].Origin);
-    }
-
-    [Theory]
-    [InlineData("game.exe")]
-    [InlineData("start.exe")]
-    [InlineData("launcher.exe")]
-    [InlineData("onscripter-ru.exe")]
-    [InlineData("siglusengine.exe")]
-    public void A_generic_or_engine_executable_defers_to_the_folder(string executable)
-    {
-        var exe = MakeGame("Hollow Knight", executable);
-
-        var result = _extractor.Extract(exe);
-
-        Assert.True(result.ExecutableNameWasGeneric);
-        Assert.Equal("Hollow Knight", result.Candidates[0].Value);
+        Assert.NotEmpty(result.Candidates);
+        Assert.Single(result.Failures);
+        Assert.Equal("Broken", result.Failures[0].Provider);
     }
 
     [Fact]
-    public void A_japanese_folder_outranks_an_ascii_executable()
+    public async Task Disabled_providers_are_skipped()
     {
-        // Real shape from this library: らぶらぼ\bolero01sys.exe, where the binary is the
-        // engine and the folder is the title.
-        var exe = MakeGame("らぶらぼ", "bolero01sys.exe");
+        var disabled = new StubGameProvider("stub", [Game("Elden Ring")]) { IsEnabled = false };
 
-        var result = _extractor.Extract(exe);
+        var identifier = new GameIdentifier([disabled]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Elden Ring"));
 
-        Assert.Equal("らぶらぼ", result.Candidates[0].Value);
-    }
-
-    [Theory]
-    [InlineData("bolero01sys", true)]
-    [InlineData("advdata02win", true)]
-    [InlineData("Portal2", false)]
-    [InlineData("re4", false)]
-    [InlineData("l4d2", false)]
-    [InlineData("eldenring", false)]
-    public void Engine_binary_heuristic_does_not_catch_real_titles(string stem, bool expected)
-    {
-        Assert.Equal(expected, CandidateExtractor.LooksLikeEngineBinary(stem));
+        Assert.Empty(result.Candidates);
     }
 
     [Fact]
-    public void A_build_directory_is_skipped_in_favour_of_the_real_folder()
+    public async Task An_exact_match_is_confident_even_when_a_sequel_scores_close()
     {
-        var exe = MakeGame(Path.Combine("Hollow Knight", "Binaries", "Win64"), "game.exe");
+        // Regression: "Steins Gate 0" matched STEINS;GATE 0 exactly, but STEINS;GATE
+        // trailed by only three points, so the margin rule refused to preselect the
+        // perfect match and cost the user an extra click.
+        var provider = new StubGameProvider("stub",
+        [
+            Game("STEINS;GATE 0"),
+            Game("STEINS;GATE"),
+        ]);
 
-        var result = _extractor.Extract(exe);
+        var identifier = new GameIdentifier([provider]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Steins_Gate_0-v1.0-CODEX"));
 
-        Assert.Contains("Hollow Knight", result.Candidates.Select(c => c.Value));
-        Assert.DoesNotContain(result.Candidates, c => c.Value is "Win64" or "Binaries");
+        Assert.Equal("STEINS;GATE 0", result.Candidates[0].CanonicalName);
+        Assert.True(result.IsConfident,
+            $"expected confidence, top={result.Candidates[0].Confidence:F3} next={result.Candidates[1].Confidence:F3}");
     }
 
     [Fact]
-    public void A_library_folder_never_becomes_a_candidate()
+    public async Task An_ambiguous_result_is_not_reported_as_confident()
     {
-        // Every game under "PC GAMES" would otherwise contribute the same useless guess.
-        var exe = MakeGame(Path.Combine("PC GAMES", "Hollow Knight"), "game.exe");
+        // The folder matches neither title outright, and both candidates are equally
+        // plausible completions of it, so Nama must make the user choose.
+        var provider = new StubGameProvider("stub",
+        [
+            Game("Hollow Knight"),
+            Game("Hollow Knight Silksong"),
+        ]);
 
-        var result = _extractor.Extract(exe);
+        var identifier = new GameIdentifier([provider]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Hollow"));
 
-        Assert.DoesNotContain(result.Candidates, c => c.Value.Contains("GAMES", StringComparison.OrdinalIgnoreCase));
+        Assert.False(result.IsConfident);
     }
 
     [Fact]
-    public void Selecting_a_folder_finds_the_game_executable_inside_it()
+    public async Task An_exact_match_still_wins_over_a_longer_similar_title()
     {
-        var directory = Path.Combine(_root, "Elden Ring");
-        Directory.CreateDirectory(directory);
-        File.WriteAllBytes(Path.Combine(directory, "eldenring.exe"), new byte[4 * 1024 * 1024]);
-        File.WriteAllBytes(Path.Combine(directory, "unins000.exe"), new byte[1024]);
-        File.WriteAllBytes(Path.Combine(directory, "vcredist_x64.exe"), new byte[8 * 1024 * 1024]);
+        // The counterpart to the ambiguous case: here the folder names one of them
+        // exactly, so preselecting is the right call rather than a coin flip.
+        var provider = new StubGameProvider("stub",
+        [
+            Game("Hollow Knight Silksong"),
+            Game("Hollow Knight"),
+        ]);
 
-        var result = _extractor.Extract(directory);
+        var identifier = new GameIdentifier([provider]);
+        var result = await identifier.IdentifyAsync(FakeLocal("Hollow Knight"));
 
-        // Installers and uninstallers are excluded even when they are larger.
-        Assert.Equal("eldenring.exe", Path.GetFileName(result.ExecutablePath));
+        Assert.Equal("Hollow Knight", result.Candidates[0].CanonicalName);
+        Assert.True(result.IsConfident);
     }
 
-    [Fact]
-    public void A_folder_with_no_executable_reports_a_warning_instead_of_failing()
+    private static Game Game(string name) => new()
     {
-        var directory = Path.Combine(_root, "Empty Game");
-        Directory.CreateDirectory(directory);
-
-        var result = _extractor.Extract(directory);
-
-        Assert.NotNull(result.Warning);
-        Assert.NotEmpty(result.Candidates); // the folder name is still a usable guess
-    }
-
-    [Fact]
-    public void A_missing_path_is_reported_rather_than_throwing()
-    {
-        var result = _extractor.Extract(Path.Combine(_root, "does-not-exist.exe"));
-
-        Assert.NotNull(result.Warning);
-    }
-
-    [Fact]
-    public void Repack_noise_is_stripped_from_the_folder_name()
-    {
-        var exe = MakeGame("ELDEN-RING-v1.12.2-FITGIRL", "game.exe");
-
-        var result = _extractor.Extract(exe);
-
-        Assert.Equal("Elden Ring", result.BestGuess);
-    }
-
-    [Fact]
-    public void Candidates_are_ordered_by_weight_and_deduplicated()
-    {
-        var exe = MakeGame("Hollow Knight", "Hollow Knight.exe");
-
-        var result = _extractor.Extract(exe);
-
-        Assert.Equal(result.Candidates.OrderByDescending(c => c.Weight), result.Candidates);
-        Assert.Equal(result.Candidates.Select(c => c.Value).Distinct().Count(), result.Candidates.Count);
-    }
-
-    [Fact]
-    public void Start_directory_is_the_executables_folder()
-    {
-        var exe = MakeGame("Hollow Knight", "game.exe");
-
-        var result = _extractor.Extract(exe);
-
-        Assert.Equal(Path.GetDirectoryName(exe), result.StartDirectory);
-    }
-}
-
-public class GameRankingTests
-{
-    private static GameCandidate Candidate(
-        string name, string source = "steam", string id = "1",
-        int? year = null, params string[] aliases) => new()
-    {
-        Source = source,
-        SourceId = id,
-        Name = name,
-        Aliases = aliases,
-        ReleaseDate = year is null ? null : new DateOnly(year.Value, 1, 1),
+        CanonicalName = name,
+        DisplayName = name,
     };
 
-    private static LocalNameCandidate Local(string value, double weight = 1.0) =>
-        new(value, CandidateOrigin.FolderName, weight, value);
-
-    [Fact]
-    public void The_exact_title_ranks_first()
+    private static LocalMetadata FakeLocal(string rawName) => new()
     {
-        var ranked = GameIdentifier.Rank(
-            [
-                Candidate("ELDEN RING NIGHTREIGN", id: "2"),
-                Candidate("ELDEN RING", id: "1"),
-                Candidate("ELDEN RING Shadow of the Erdtree", id: "3"),
-            ],
-            [Local("Elden Ring")]);
+        Target = new LocalGameTarget
+        {
+            ExecutablePath = $@"D:\Games\{rawName}\{rawName}.exe",
+            StartDirectory = $@"D:\Games\{rawName}",
+            InstallRoot = $@"D:\Games\{rawName}",
+        },
+        Hints = [new NameHint(rawName, NameHintOrigin.InstallRootFolder, 0.9)],
+    };
+}
 
-        Assert.Equal("1", ranked[0].SourceId);
-        Assert.Equal(1.0, ranked[0].Confidence);
+public class ArtworkAggregatorTests
+{
+    [Fact]
+    public async Task Groups_results_into_sections_by_type()
+    {
+        var provider = new StubArtworkProvider("A",
+        [
+            Art(ArtworkType.Cover, "c1", 600, 900, 10),
+            Art(ArtworkType.Cover, "c2", 600, 900, 5),
+            Art(ArtworkType.Grid, "g1", 460, 215, 8),
+        ]);
+
+        var collection = await new ArtworkAggregator([provider]).CollectAsync(TestGame);
+
+        Assert.Equal(2, collection.Sections.Count);
+        Assert.Equal(2, collection[ArtworkType.Cover]!.Items.Count);
+        Assert.Single(collection[ArtworkType.Grid]!.Items);
     }
 
     [Fact]
-    public void Matching_an_alias_counts_as_matching_the_game()
+    public async Task Shows_exactly_five_recommendations_and_flags_the_rest()
     {
-        var ranked = GameIdentifier.Rank(
-            [Candidate("Subarashiki Hibi", aliases: "素晴らしき日々～不連続存在～")],
-            [Local("素晴らしき日々")]);
+        var items = Enumerable.Range(0, 12)
+            .Select(i => Art(ArtworkType.Cover, $"c{i}", 600, 900, i))
+            .ToArray();
 
-        Assert.True(ranked[0].Confidence > 0.8);
+        var collection = await new ArtworkAggregator([new StubArtworkProvider("A", items)]).CollectAsync(TestGame);
+
+        var section = collection[ArtworkType.Cover]!;
+        Assert.Equal(5, section.Recommended.Count);
+        Assert.True(section.HasMore);
+        Assert.Equal(12, section.Items.Count);
     }
 
     [Fact]
-    public void A_weak_source_cannot_outrank_a_strong_one_on_a_lucky_hit()
+    public async Task Does_not_flag_more_when_five_or_fewer_results_exist()
     {
-        var ranked = GameIdentifier.Rank(
-            [Candidate("Bolero", id: "wrong"), Candidate("らぶらぼ", id: "right")],
-            [
-                Local("らぶらぼ", weight: 0.95),   // the folder
-                Local("bolero01sys", weight: 0.24), // the engine binary
-            ]);
+        var items = Enumerable.Range(0, 4)
+            .Select(i => Art(ArtworkType.Cover, $"c{i}", 600, 900, i))
+            .ToArray();
 
-        Assert.Equal("right", ranked[0].SourceId);
+        var collection = await new ArtworkAggregator([new StubArtworkProvider("A", items)]).CollectAsync(TestGame);
+
+        Assert.False(collection[ArtworkType.Cover]!.HasMore);
     }
 
     [Fact]
-    public void Confidence_is_the_best_single_pairing_not_an_average()
+    public async Task Ranks_a_correctly_shaped_cover_above_a_badly_shaped_one()
     {
-        // Most local guesses are noise by design; averaging would bury the one that hits.
-        var ranked = GameIdentifier.Rank(
-            [Candidate("Elden Ring")],
-            [Local("Elden Ring"), Local("nonsense"), Local("more nonsense")]);
+        var provider = new StubArtworkProvider("A",
+        [
+            Art(ArtworkType.Cover, "wrong-shape", 1920, 200, 100),
+            Art(ArtworkType.Cover, "right-shape", 600, 900, 100),
+        ]);
 
-        Assert.Equal(1.0, ranked[0].Confidence);
+        var collection = await new ArtworkAggregator([provider]).CollectAsync(TestGame);
+
+        Assert.Equal("right-shape", collection[ArtworkType.Cover]!.Items[0].Id);
     }
 
     [Fact]
-    public void A_dated_release_breaks_a_tie_against_a_bare_entry()
+    public async Task Ranks_higher_resolution_first_when_everything_else_matches()
     {
-        var ranked = GameIdentifier.Rank(
-            [Candidate("Elden Ring", id: "bare"), Candidate("Elden Ring", id: "dated", year: 2022)],
-            [Local("Elden Ring")]);
+        var provider = new StubArtworkProvider("A",
+        [
+            Art(ArtworkType.Cover, "small", 600, 900, 50),
+            Art(ArtworkType.Cover, "large", 1200, 1800, 50),
+        ]);
 
-        Assert.Equal("dated", ranked[0].SourceId);
+        var collection = await new ArtworkAggregator([provider]).CollectAsync(TestGame);
+
+        Assert.Equal("large", collection[ArtworkType.Cover]!.Items[0].Id);
     }
 
     [Fact]
-    public void Ranking_an_empty_result_set_is_safe()
+    public async Task Normalizes_scores_so_one_providers_scale_cannot_dominate()
     {
-        Assert.Empty(GameIdentifier.Rank([], [Local("Elden Ring")]));
+        // SteamGridDB reports upvote counts in the hundreds while Steam reports a 0-1
+        // confidence. Without per-provider normalization the raw numbers would decide
+        // the ordering on their own, regardless of fit.
+        var upvotes = new StubArtworkProvider("Votes",
+        [
+            Art(ArtworkType.Cover, "votes-bad-shape", 1920, 200, 500),
+            Art(ArtworkType.Cover, "votes-good-shape", 600, 900, 480),
+        ]);
+        var fraction = new StubArtworkProvider("Fraction", [Art(ArtworkType.Cover, "fraction", 600, 900, 0.7)]);
+
+        var collection = await new ArtworkAggregator([upvotes, fraction]).CollectAsync(TestGame);
+        var items = collection[ArtworkType.Cover]!.Items;
+
+        // The badly-shaped image loses despite having the single highest raw score.
+        Assert.NotEqual("votes-bad-shape", items[0].Id);
     }
+
+    [Fact]
+    public async Task Ranks_animated_artwork_below_stills()
+    {
+        var provider = new StubArtworkProvider("A",
+        [
+            Art(ArtworkType.Grid, "animated", 460, 215, 100, animated: true),
+            Art(ArtworkType.Grid, "still", 460, 215, 90),
+        ]);
+
+        var collection = await new ArtworkAggregator([provider]).CollectAsync(TestGame);
+
+        Assert.Equal("still", collection[ArtworkType.Grid]!.Items[0].Id);
+    }
+
+    [Fact]
+    public async Task Combines_artwork_from_several_providers_into_one_section()
+    {
+        var a = new StubArtworkProvider("A", [Art(ArtworkType.Cover, "a1", 600, 900, 5)]);
+        var b = new StubArtworkProvider("B", [Art(ArtworkType.Cover, "b1", 600, 900, 5)]);
+
+        var collection = await new ArtworkAggregator([a, b]).CollectAsync(TestGame);
+
+        Assert.Equal(2, collection[ArtworkType.Cover]!.Items.Count);
+    }
+
+    [Fact]
+    public async Task Removes_the_same_image_arriving_from_two_providers()
+    {
+        var a = new StubArtworkProvider("A", [Art(ArtworkType.Cover, "a1", 600, 900, 5, "https://same/x.png")]);
+        var b = new StubArtworkProvider("B", [Art(ArtworkType.Cover, "b1", 600, 900, 5, "https://same/x.png")]);
+
+        var collection = await new ArtworkAggregator([a, b]).CollectAsync(TestGame);
+
+        Assert.Single(collection[ArtworkType.Cover]!.Items);
+    }
+
+    [Fact]
+    public async Task A_failing_provider_is_reported_but_others_still_contribute()
+    {
+        var good = new StubArtworkProvider("Good", [Art(ArtworkType.Cover, "c1", 600, 900, 5)]);
+        var bad = new ThrowingArtworkProvider();
+
+        var collection = await new ArtworkAggregator([good, bad]).CollectAsync(TestGame);
+
+        Assert.Single(collection[ArtworkType.Cover]!.Items);
+        Assert.Single(collection.Failures);
+    }
+
+    [Fact]
+    public async Task No_artwork_yields_an_empty_collection_rather_than_an_error()
+    {
+        var collection = await new ArtworkAggregator([new StubArtworkProvider("A", [])]).CollectAsync(TestGame);
+        Assert.True(collection.IsEmpty);
+    }
+
+    private static readonly Game TestGame = new()
+    {
+        CanonicalName = "Elden Ring",
+        SourceIds = [new GameSourceId("stub", "1")],
+    };
+
+    private static Artwork Art(
+        ArtworkType type, string id, int w, int h, double score, string? url = null, bool animated = false) => new()
+    {
+        Id = id,
+        Type = type,
+        Url = url ?? $"https://example.test/{id}.png",
+        Source = "Test",
+        Width = w,
+        Height = h,
+        Score = score,
+        IsAnimated = animated,
+    };
+}
+
+// --- Stubs -------------------------------------------------------------------
+
+file sealed class StubGameProvider(string id, Game[] games) : IGameProvider
+{
+    public string Id { get; } = id;
+    public string DisplayName => Id;
+    public bool IsEnabled { get; set; } = true;
+    public int Priority => 10;
+
+    public Task<IReadOnlyList<Game>> SearchAsync(string query, CancellationToken ct = default)
+    {
+        // Re-stamp each result with this provider's source id, as a real provider would.
+        IReadOnlyList<Game> results = games.Select(g => new Game
+        {
+            CanonicalName = g.CanonicalName,
+            DisplayName = g.DisplayName,
+            SourceIds = [new GameSourceId(Id, g.CanonicalName)],
+        }).ToList();
+
+        return Task.FromResult(results);
+    }
+}
+
+file sealed class ThrowingGameProvider : IGameProvider
+{
+    public string Id => "broken";
+    public string DisplayName => "Broken";
+    public bool IsEnabled => true;
+    public int Priority => 99;
+
+    public Task<IReadOnlyList<Game>> SearchAsync(string query, CancellationToken ct = default) =>
+        throw new HttpRequestException("boom");
+}
+
+file sealed class StubArtworkProvider(string name, Artwork[] artwork) : IArtworkProvider
+{
+    public string Id { get; } = name;
+    public string DisplayName { get; } = name;
+    public bool IsEnabled => true;
+    public int Priority => 10;
+
+    public IReadOnlyCollection<ArtworkType> SupportedTypes { get; } =
+        [ArtworkType.Cover, ArtworkType.Grid, ArtworkType.Hero, ArtworkType.Logo, ArtworkType.Icon];
+
+    public Task<IReadOnlyList<Artwork>> GetArtworkAsync(
+        Game game,
+        IReadOnlyCollection<ArtworkType> types,
+        CancellationToken ct = default)
+    {
+        IReadOnlyList<Artwork> results = artwork
+            .Where(a => types.Contains(a.Type))
+            .Select(a => new Artwork
+            {
+                Id = a.Id,
+                Type = a.Type,
+                Url = a.Url,
+                Source = DisplayName,
+                Width = a.Width,
+                Height = a.Height,
+                Score = a.Score,
+                IsAnimated = a.IsAnimated,
+            })
+            .ToList();
+
+        return Task.FromResult(results);
+    }
+}
+
+file sealed class ThrowingArtworkProvider : IArtworkProvider
+{
+    public string Id => "broken";
+    public string DisplayName => "Broken";
+    public bool IsEnabled => true;
+    public int Priority => 99;
+
+    public IReadOnlyCollection<ArtworkType> SupportedTypes { get; } = [ArtworkType.Cover];
+
+    public Task<IReadOnlyList<Artwork>> GetArtworkAsync(
+        Game game,
+        IReadOnlyCollection<ArtworkType> types,
+        CancellationToken ct = default) =>
+        throw new HttpRequestException("boom");
 }

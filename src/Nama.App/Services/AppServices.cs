@@ -1,112 +1,80 @@
-using System.IO;
 using System.Net.Http;
 using Nama.Core.Aggregation;
 using Nama.Core.Identification;
+using Nama.Core.Normalization;
+using Nama.Core.Providers;
 using Nama.Providers;
-using Nama.Steam;
+using Nama.Providers.Local;
+using Nama.SteamIntegration;
 using Nama.Storage;
 
 namespace Nama.App.Services;
 
 /// <summary>
-/// Composition root. Built once at startup and handed to the view models.
-/// <para>
-/// Deliberately plain rather than a DI container: the object graph is small, fixed, and
-/// this way the whole wiring of the app is readable in one screen.
-/// </para>
+/// Composition root. Nama is small enough that a hand-wired container is clearer than a
+/// DI framework, and it keeps startup instant.
 /// </summary>
 public sealed class AppServices : IDisposable
 {
-    private AppServices(
-        NamaSettings settings,
-        SqliteSearchCache cache,
-        ProviderSet providers,
-        SteamManager steam,
-        ThumbnailLoader thumbnails)
-    {
-        Settings = settings;
-        Cache = cache;
-        Providers = providers;
-        Steam = steam;
-        Thumbnails = thumbnails;
+    private NamaSettings _settings;
 
-        Identifier = new GameIdentifier(new CandidateExtractor(), new GameSearchAggregator(providers.GameProviders));
-        Artwork = new ArtworkAggregator(providers.ArtworkProviders);
-        Downloader = new HttpImageDownloader(providers.Http);
+    public AppServices()
+    {
+        SettingsStore = new SettingsStore();
+        _settings = SettingsStore.Load();
+
+        HttpClient = ProviderHttp.CreateClient();
+        SearchCache = new SearchCache(TimeSpan.FromHours(Math.Max(1, _settings.SearchCacheHours)));
+        ImageCache = new ImageCache(HttpClient);
+        ImageLoader = new ImageLoader(ImageCache);
+
+        Providers = new ProviderRegistry(HttpClient, SearchCache, () => _settings);
+        Normalizer = new NameNormalizer();
+
+        SteamManager = new SteamManager((url, ct) => ImageCache.GetBytesAsync(url, ct));
     }
 
-    public NamaSettings Settings { get; private set; }
+    public SettingsStore SettingsStore { get; }
+    public HttpClient HttpClient { get; }
+    public SearchCache SearchCache { get; }
+    public ImageCache ImageCache { get; }
+    public ImageLoader ImageLoader { get; }
+    public ProviderRegistry Providers { get; }
+    public NameNormalizer Normalizer { get; }
+    public SteamManager SteamManager { get; }
 
-    public SqliteSearchCache Cache { get; }
+    /// <summary>Current settings. Mutate via <see cref="SaveSettings"/> so changes reach disk.</summary>
+    public NamaSettings Settings => _settings;
 
-    public ProviderSet Providers { get; private set; }
+    /// <summary>
+    /// A fresh identifier over the currently enabled providers. Built per use so a
+    /// settings change takes effect on the next search without restarting Nama.
+    /// </summary>
+    public GameIdentifier CreateIdentifier() => new(Providers.GameProviders, Normalizer);
 
-    public SteamManager Steam { get; }
-
-    public ThumbnailLoader Thumbnails { get; }
-
-    public GameIdentifier Identifier { get; private set; }
-
-    public ArtworkAggregator Artwork { get; private set; }
-
-    public HttpImageDownloader Downloader { get; private set; }
-
-    /// <summary>True when SteamGridDB has no key, so the artwork step will be thin.</summary>
-    public bool ArtworkIsLimited => string.IsNullOrWhiteSpace(Settings.SteamGridDbApiKey);
-
-    public static AppServices Create()
+    /// <summary>
+    /// Builds the artwork aggregator. When a local target is supplied the game's own
+    /// executable icon is added as an extra provider — it needs the executable path, so
+    /// unlike the online providers it cannot be a long-lived singleton.
+    /// </summary>
+    public ArtworkAggregator CreateArtworkAggregator(LocalGameTarget? target = null)
     {
-        var settings = NamaSettings.Load();
-        var cache = new SqliteSearchCache();
-        var providers = ProviderFactory.Create(
-            OptionsFrom(settings), cache);
+        var providers = new List<IArtworkProvider>(Providers.ArtworkProviders);
 
-        // Its own client, not the provider set's: ReloadProviders disposes the old set, and
-        // a thumbnail loader holding that client would silently stop working the moment the
-        // user saved settings.
-        var thumbnailHttp = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        if (target is not null)
+            providers.Add(new ExecutableIconProvider(target));
 
-        var thumbnails = new ThumbnailLoader(
-            new HttpImageDownloader(thumbnailHttp),
-            Path.Combine(Path.GetDirectoryName(SqliteSearchCache.DefaultPath)!, "thumbs"));
-
-        return new AppServices(settings, cache, providers, new SteamManager(), thumbnails)
-        {
-            ThumbnailHttp = thumbnailHttp,
-        };
+        return new ArtworkAggregator(providers);
     }
 
-    /// <summary>Rebuilds the providers after the API key changes, without restarting the app.</summary>
-    public void ReloadProviders()
+    public void SaveSettings(NamaSettings settings)
     {
-        Settings = NamaSettings.Load();
-
-        var replacement = ProviderFactory.Create(
-            OptionsFrom(Settings), Cache);
-
-        var previous = Providers;
-        Providers = replacement;
-
-        Identifier = new GameIdentifier(new CandidateExtractor(), new GameSearchAggregator(replacement.GameProviders));
-        Artwork = new ArtworkAggregator(replacement.ArtworkProviders);
-        Downloader = new HttpImageDownloader(replacement.Http);
-
-        previous.Dispose();
+        _settings = settings;
+        SettingsStore.Save(settings);
     }
-
-    private static ProviderOptions OptionsFrom(NamaSettings settings) => new()
-    {
-        SteamGridDbApiKey = settings.SteamGridDbApiKey,
-        EnableDlsite = settings.ExperimentalDlsiteEnabled,
-        EnableVndb = settings.ExperimentalVndbEnabled,
-    };
-
-    private HttpClient? ThumbnailHttp { get; init; }
 
     public void Dispose()
     {
-        Providers.Dispose();
-        ThumbnailHttp?.Dispose();
-        Cache.Dispose();
+        HttpClient.Dispose();
     }
 }

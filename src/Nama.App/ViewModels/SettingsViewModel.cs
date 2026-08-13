@@ -1,158 +1,252 @@
 using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using System.Diagnostics;
+using System.Windows.Input;
+using Microsoft.Win32;
+using Nama.App.Infrastructure;
 using Nama.App.Services;
 using Nama.App.WindowsIntegration;
-using Nama.Steam.Models;
+using Nama.Providers;
 
 namespace Nama.App.ViewModels;
 
 /// <summary>
-/// Settings, kept deliberately short. Nama is meant to be opinionated, so this covers only
-/// the things it genuinely cannot decide for the user: the API key it is not allowed to
-/// ship, which Steam account to use when there is more than one, and whether the Explorer
-/// entry is installed.
+/// The settings overlay. Intentionally short: credentials, provider toggles, Explorer
+/// integration and a cache reset — nothing that turns Nama into a configuration app.
 /// </summary>
-public sealed partial class SettingsViewModel : ObservableObject
+public sealed class SettingsViewModel : ObservableObject
 {
     private readonly AppServices _services;
+    private readonly Action _close;
 
-    public SettingsViewModel(AppServices services)
+    private string? _steamGridDbApiKey;
+    private string? _igdbClientId;
+    private string? _igdbClientSecret;
+    private string? _steamPathOverride;
+    private bool _contextMenuInstalled;
+    private string? _status;
+
+    public SettingsViewModel(AppServices services, Action close)
     {
         _services = services;
+        _close = close;
 
-        ApiKey = services.Settings.SteamGridDbApiKey ?? string.Empty;
-        ExperimentalDlsiteEnabled = services.Settings.ExperimentalDlsiteEnabled;
-        ExperimentalVndbEnabled = services.Settings.ExperimentalVndbEnabled;
-        ContextMenuInstalled = ContextMenuInstaller.IsInstalled();
+        CloseCommand = RelayCommand.Create(Save);
+        InstallContextMenuCommand = RelayCommand.Create(InstallContextMenu);
+        RemoveContextMenuCommand = RelayCommand.Create(RemoveContextMenu);
+        BrowseSteamPathCommand = RelayCommand.Create(BrowseSteamPath);
+        ClearCacheCommand = RelayCommand.Create(ClearCache);
+        OpenSteamGridDbKeyPageCommand = RelayCommand.Create(
+            () => OpenUrl("https://www.steamgriddb.com/profile/preferences/api"));
 
-        LoadAccounts();
-        UpdateCacheCount();
+        Refresh();
     }
 
-    public ObservableCollection<SteamAccount> Accounts { get; } = [];
-
-    [ObservableProperty]
-    private string apiKey = string.Empty;
-
-    [ObservableProperty]
-    private bool experimentalDlsiteEnabled;
-
-    [ObservableProperty]
-    private bool experimentalVndbEnabled;
-
-    [ObservableProperty]
-    private SteamAccount? selectedAccount;
-
-    [ObservableProperty]
-    private bool contextMenuInstalled;
-
-    [ObservableProperty]
-    private string? statusMessage;
-
-    [ObservableProperty]
-    private string? errorMessage;
-
-    [ObservableProperty]
-    private int cacheCount;
-
-    public bool HasMultipleAccounts => Accounts.Count > 1;
-
-    public string ContextMenuNote =>
-        "On Windows 11 this appears under \"Show more options\" in the right-click menu.";
-
-    private void LoadAccounts()
+    /// <summary>Reloads the form from current settings and system state.</summary>
+    public void Refresh()
     {
-        var installation = _services.Steam.FindSteamInstallation();
-        if (installation is null)
-        {
-            ErrorMessage = "Steam installation not found.";
-            return;
-        }
+        var settings = _services.Settings;
 
-        foreach (var account in _services.Steam.FindLibraryData(installation)) Accounts.Add(account);
+        _steamGridDbApiKey = settings.SteamGridDbApiKey;
+        _igdbClientId = settings.IgdbClientId;
+        _igdbClientSecret = settings.IgdbClientSecret;
+        _steamPathOverride = settings.SteamPathOverride;
+        _contextMenuInstalled = ContextMenuInstaller.IsInstalled();
 
-        var preferred = _services.Settings.PreferredSteamAccountId;
-        SelectedAccount = Accounts.FirstOrDefault(a => a.AccountId == preferred) ?? Accounts.FirstOrDefault();
+        OnPropertyChanged(nameof(SteamGridDbApiKey));
+        OnPropertyChanged(nameof(IgdbClientId));
+        OnPropertyChanged(nameof(IgdbClientSecret));
+        OnPropertyChanged(nameof(SteamPathOverride));
+        OnPropertyChanged(nameof(ContextMenuInstalled));
 
-        OnPropertyChanged(nameof(HasMultipleAccounts));
+        RefreshProviders();
+        RefreshCacheSize();
     }
 
-    private void UpdateCacheCount() => CacheCount = _services.Cache.Count();
+    public string? SteamGridDbApiKey
+    {
+        get => _steamGridDbApiKey;
+        set
+        {
+            if (SetProperty(ref _steamGridDbApiKey, value)) Save();
+        }
+    }
 
-    [RelayCommand]
+    public string? IgdbClientId
+    {
+        get => _igdbClientId;
+        set
+        {
+            if (SetProperty(ref _igdbClientId, value)) Save();
+        }
+    }
+
+    public string? IgdbClientSecret
+    {
+        get => _igdbClientSecret;
+        set
+        {
+            if (SetProperty(ref _igdbClientSecret, value)) Save();
+        }
+    }
+
+    public string? SteamPathOverride
+    {
+        get => _steamPathOverride;
+        set
+        {
+            if (SetProperty(ref _steamPathOverride, value)) Save();
+        }
+    }
+
+    public bool ContextMenuInstalled
+    {
+        get => _contextMenuInstalled;
+        private set => SetProperty(ref _contextMenuInstalled, value);
+    }
+
+    /// <summary>Live state of each provider, including why a disabled one cannot run.</summary>
+    public ObservableCollection<ProviderToggleViewModel> Providers { get; } = [];
+
+    public string CacheSize { get; private set; } = "0 MB";
+
+    public string? Status
+    {
+        get => _status;
+        private set => SetProperty(ref _status, value);
+    }
+
+    /// <summary>Windows 11 hides third-party verbs behind "Show more options".</summary>
+    public string ContextMenuHint =>
+        Environment.OSVersion.Version.Build >= 22000
+            ? "On Windows 11 the entry appears under \"Show more options\" (Shift+F10)."
+            : "The entry appears when you right-click a game executable or folder.";
+
+    public ICommand CloseCommand { get; }
+    public ICommand InstallContextMenuCommand { get; }
+    public ICommand RemoveContextMenuCommand { get; }
+    public ICommand BrowseSteamPathCommand { get; }
+    public ICommand ClearCacheCommand { get; }
+    public ICommand OpenSteamGridDbKeyPageCommand { get; }
+
     private void Save()
     {
-        ErrorMessage = null;
+        var settings = _services.Settings;
 
-        try
-        {
-            var settings = _services.Settings;
+        settings.SteamGridDbApiKey = Blank(_steamGridDbApiKey);
+        settings.IgdbClientId = Blank(_igdbClientId);
+        settings.IgdbClientSecret = Blank(_igdbClientSecret);
+        settings.SteamPathOverride = Blank(_steamPathOverride);
 
-            // Assigning through the property encrypts it; only ciphertext reaches disk.
-            settings.SteamGridDbApiKey = string.IsNullOrWhiteSpace(ApiKey) ? null : ApiKey.Trim();
-            settings.PreferredSteamAccountId = SelectedAccount?.AccountId;
-            settings.ContextMenuInstalled = ContextMenuInstalled;
-            settings.ExperimentalDlsiteEnabled = ExperimentalDlsiteEnabled;
-            settings.ExperimentalVndbEnabled = ExperimentalVndbEnabled;
-            settings.Save();
-
-            // Rebuild providers so a newly entered key takes effect without a restart.
-            _services.ReloadProviders();
-
-            StatusMessage = "Saved.";
-        }
-        catch (Exception e)
-        {
-            ErrorMessage = e.Message;
-        }
+        _services.SaveSettings(settings);
+        RefreshProviders();
     }
 
-    [RelayCommand]
-    private void ToggleContextMenu()
+    private static string? Blank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private void RefreshProviders()
     {
-        ErrorMessage = null;
+        Providers.Clear();
 
-        var error = ContextMenuInstalled ? ContextMenuInstaller.Uninstall() : ContextMenuInstaller.Install();
-
-        if (error is not null)
-        {
-            ErrorMessage = error;
-            return;
-        }
-
-        ContextMenuInstalled = !ContextMenuInstalled;
-        StatusMessage = ContextMenuInstalled
-            ? "Added to the Explorer right-click menu."
-            : "Removed from the Explorer right-click menu.";
-
-        _services.Settings.ContextMenuInstalled = ContextMenuInstalled;
-        _services.Settings.Save();
-    }
-
-    [RelayCommand]
-    private async Task ClearCacheAsync()
-    {
-        await _services.Cache.ClearAsync().ConfigureAwait(true);
-
-        UpdateCacheCount();
-        StatusMessage = "Cache cleared.";
-    }
-
-    [RelayCommand]
-    private static void OpenKeyPage()
-    {
-        try
-        {
-            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+        foreach (var status in _services.Providers.Describe())
+            Providers.Add(new ProviderToggleViewModel(status, enabled =>
             {
-                FileName = "https://www.steamgriddb.com/profile/preferences/api",
-                UseShellExecute = true,
-            });
-        }
-        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+                var settings = _services.Settings;
+                settings.SetProviderEnabled(status.Id, enabled);
+                _services.SaveSettings(settings);
+                RefreshProviders();
+            }, _services.Settings.IsProviderEnabled(status.Id)));
+    }
+
+    private void RefreshCacheSize()
+    {
+        var bytes = _services.ImageCache.SizeOnDisk();
+        CacheSize = bytes < 1024 * 1024
+            ? $"{bytes / 1024.0:0} KB"
+            : $"{bytes / (1024.0 * 1024.0):0.0} MB";
+
+        OnPropertyChanged(nameof(CacheSize));
+    }
+
+    private void InstallContextMenu()
+    {
+        try
         {
-            // No default browser; the URL is shown in the dialog anyway.
+            ContextMenuInstaller.Install();
+            ContextMenuInstalled = true;
+            Status = "Added to the Explorer right-click menu.";
+        }
+        catch (InvalidOperationException ex)
+        {
+            Status = ex.Message;
+        }
+    }
+
+    private void RemoveContextMenu()
+    {
+        ContextMenuInstaller.Uninstall();
+        ContextMenuInstalled = false;
+        Status = "Removed from the Explorer right-click menu.";
+    }
+
+    private void BrowseSteamPath()
+    {
+        var dialog = new OpenFolderDialog { Title = "Select your Steam folder" };
+
+        if (dialog.ShowDialog() == true)
+            SteamPathOverride = dialog.FolderName;
+    }
+
+    private void ClearCache()
+    {
+        _services.SearchCache.Clear();
+        _services.ImageCache.Clear();
+        RefreshCacheSize();
+        Status = "Cached searches and images cleared.";
+    }
+
+    private void OpenUrl(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Status = "Could not open your browser.";
+        }
+    }
+}
+
+/// <summary>A provider row in settings, with its enable toggle and requirement note.</summary>
+public sealed class ProviderToggleViewModel : ObservableObject
+{
+    private readonly Action<bool> _onChanged;
+    private bool _isEnabled;
+
+    public ProviderToggleViewModel(ProviderStatus status, Action<bool> onChanged, bool isEnabled)
+    {
+        _onChanged = onChanged;
+        _isEnabled = isEnabled;
+
+        DisplayName = status.DisplayName;
+        Requirement = status.Requirement;
+        IsActive = status.IsEnabled;
+    }
+
+    public string DisplayName { get; }
+
+    /// <summary>Why the provider cannot run, e.g. a missing API key.</summary>
+    public string? Requirement { get; }
+
+    /// <summary>True when the provider will actually be queried right now.</summary>
+    public bool IsActive { get; }
+
+    public bool IsEnabled
+    {
+        get => _isEnabled;
+        set
+        {
+            if (SetProperty(ref _isEnabled, value)) _onChanged(value);
         }
     }
 }

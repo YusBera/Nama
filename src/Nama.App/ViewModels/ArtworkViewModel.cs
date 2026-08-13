@@ -1,251 +1,368 @@
 using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using System.Windows.Input;
+using Nama.App.Infrastructure;
+using Nama.App.Services;
+using Nama.Core.Identification;
 using Nama.Core.Models;
-using Nama.Steam.Models;
-using Nama.Steam.Writing;
+using Nama.SteamIntegration;
 
 namespace Nama.App.ViewModels;
 
-/// <summary>
-/// Step 3: pick artwork, adjust the Steam name, add it.
-/// <para>
-/// This is also where every way the write can be refused surfaces — a duplicate entry,
-/// Steam being open, a file Nama does not fully understand. Each gets an explicit choice
-/// rather than a failure message.
-/// </para>
-/// </summary>
-public sealed partial class ArtworkViewModel(ShellViewModel shell) : ObservableObject
+/// <summary>How the user chose to resolve an existing library entry.</summary>
+public enum DuplicateResolution
 {
+    /// <summary>Nothing decided yet; the prompt is showing.</summary>
+    Pending,
+
+    /// <summary>Keep the entry, write the new artwork over it.</summary>
+    UpdateArtwork,
+
+    /// <summary>Rewrite the entry entirely, including target and name.</summary>
+    ReplaceEntry,
+}
+
+/// <summary>
+/// The artwork picker plus the final commit step: choose art, edit the Steam name,
+/// resolve any duplicate, and write everything into the library.
+/// </summary>
+public sealed class ArtworkViewModel : ObservableObject
+{
+    private readonly AppServices _services;
+    private readonly ShellViewModel _shell;
+    private readonly LocalMetadata _local;
+    private readonly Game _game;
+
+    private string _displayName;
+    private bool _isLoading;
+    private bool _isCommitting;
+    private string? _loadWarning;
+    private bool _hasNoArtwork;
+
+    private SteamInstallation? _installation;
+    private SteamUser? _steamUser;
+    private ExistingEntry? _existingEntry;
+    private DuplicateResolution _resolution = DuplicateResolution.Pending;
+    private bool _isDuplicatePromptOpen;
+
+    public ArtworkViewModel(AppServices services, ShellViewModel shell, LocalMetadata local, Game game)
+    {
+        _services = services;
+        _shell = shell;
+        _local = local;
+        _game = game;
+
+        _displayName = game.EffectiveDisplayName;
+
+        BackCommand = RelayCommand.Create(() => shell.ShowIdentify(local.Target.ExecutablePath));
+        AddToSteamCommand = new AsyncRelayCommand(_ => CommitAsync(), _ => CanCommit);
+
+        ChooseUpdateArtworkCommand = RelayCommand.Create(() => ResolveDuplicate(DuplicateResolution.UpdateArtwork));
+        ChooseReplaceEntryCommand = RelayCommand.Create(() => ResolveDuplicate(DuplicateResolution.ReplaceEntry));
+        CancelDuplicateCommand = RelayCommand.Create(CancelDuplicate);
+    }
+
     public ObservableCollection<ArtworkSectionViewModel> Sections { get; } = [];
 
-    [ObservableProperty]
-    private string displayName = string.Empty;
+    public Game Game => _game;
 
-    [ObservableProperty]
-    private bool isBusy;
+    /// <summary>The name Nama detected, shown above the editable field.</summary>
+    public string DetectedName => _game.CanonicalName;
 
-    [ObservableProperty]
-    private string? busyMessage;
-
-    [ObservableProperty]
-    private string? errorMessage;
-
-    [ObservableProperty]
-    private string? noticeMessage;
-
-    [ObservableProperty]
-    private bool hasArtwork;
-
-    /// <summary>Set when the game is already in the library. Drives the duplicate prompt.</summary>
-    [ObservableProperty]
-    private SteamShortcutSummary? duplicate;
-
-    /// <summary>Set when Steam is open and would discard the write.</summary>
-    [ObservableProperty]
-    private bool steamIsRunning;
-
-    public bool ShowDuplicatePrompt => Duplicate is not null;
-
-    public bool CanAdd => !IsBusy && !string.IsNullOrWhiteSpace(DisplayName);
-
-    partial void OnDuplicateChanged(SteamShortcutSummary? value) => OnPropertyChanged(nameof(ShowDuplicatePrompt));
-
-    partial void OnIsBusyChanged(bool value) => OnPropertyChanged(nameof(CanAdd));
-
-    partial void OnDisplayNameChanged(string value) => OnPropertyChanged(nameof(CanAdd));
-
-    /// <summary>Fetches artwork for the confirmed game and builds the sections.</summary>
-    public async Task LoadAsync(GameCandidate game)
+    /// <summary>
+    /// The name that will appear in Steam. Independent of the executable's filename and
+    /// freely editable before committing.
+    /// </summary>
+    public string DisplayName
     {
-        Clear();
-
-        DisplayName = game.Name;
-        IsBusy = true;
-        BusyMessage = "Finding artwork…";
-
-        try
+        get => _displayName;
+        set
         {
-            var reference = Game.FromCandidate(game).Ref;
-            var collection = await Task.Run(() => shell.Services.Artwork.GetArtworkAsync(reference)).ConfigureAwait(true);
-
-            ArtworkType[] steamSlots =
-                [ArtworkType.Icon, ArtworkType.Grid, ArtworkType.Cover, ArtworkType.Hero, ArtworkType.Logo];
-
-            foreach (var type in steamSlots)
-            {
-                var section = new ArtworkSectionViewModel(type, collection.OfType(type), shell.Services.Thumbnails);
-                section.SelectionChanged += (_, _) => OnPropertyChanged(nameof(SelectedCount));
-                Sections.Add(section);
-
-                // Pre-select the top recommendation: the common case is accepting it.
-                section.Selected = section.Tiles.FirstOrDefault();
-            }
-
-            HasArtwork = Sections.Any(s => s.TotalCount > 0);
-            OnPropertyChanged(nameof(SelectedCount));
-
-            if (!HasArtwork)
-            {
-                NoticeMessage = "No artwork found. The game can still be added without it.";
-            }
-            else if (shell.Services.ArtworkIsLimited)
-            {
-                NoticeMessage = "Add a SteamGridDB key in settings for many more artwork options.";
-            }
-
-            if (collection.FailedProviders.Count > 0)
-            {
-                NoticeMessage = $"Some artwork sources did not respond: {string.Join(", ", collection.FailedProviders)}";
-            }
-        }
-        catch (Exception e)
-        {
-            ErrorMessage = $"Could not load artwork: {e.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-            BusyMessage = null;
+            if (!SetProperty(ref _displayName, value)) return;
+            OnPropertyChanged(nameof(CanCommit));
+            (AddToSteamCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
     }
 
-    public int SelectedCount => Sections.Count(s => s.Selected is not null);
+    public string ExecutablePath => _local.Target.ExecutablePath;
 
-    private Dictionary<ArtworkType, Artwork> BuildSelections() =>
-        Sections
-            .Where(s => s.Selected is not null)
-            .ToDictionary(s => s.Type, s => s.Selected!.Artwork);
-
-    [RelayCommand]
-    private Task AddAsync() => WriteAsync(DuplicateAction.Fail);
-
-    [RelayCommand]
-    private Task UpdateArtworkOnlyAsync() => WriteAsync(DuplicateAction.UpdateArtwork);
-
-    [RelayCommand]
-    private Task ReplaceEntryAsync() => WriteAsync(DuplicateAction.ReplaceEntry);
-
-    [RelayCommand]
-    private void CancelDuplicate() => Duplicate = null;
-
-    /// <summary>Backs out of the close-Steam prompt without shutting anything down.</summary>
-    [RelayCommand]
-    private void DismissSteamPrompt() => SteamIsRunning = false;
-
-    /// <summary>Closes Steam on the user's behalf, then retries.</summary>
-    [RelayCommand]
-    private async Task CloseSteamAndRetryAsync()
+    public bool IsLoading
     {
-        var installation = shell.Services.Steam.FindSteamInstallation();
-        if (installation is null)
+        get => _isLoading;
+        private set
         {
-            ErrorMessage = "Steam installation not found.";
-            return;
+            if (SetProperty(ref _isLoading, value)) OnPropertyChanged(nameof(CanCommit));
+            (AddToSteamCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
         }
+    }
 
-        IsBusy = true;
-        BusyMessage = "Closing Steam…";
+    public bool IsCommitting
+    {
+        get => _isCommitting;
+        private set => SetProperty(ref _isCommitting, value);
+    }
+
+    /// <summary>Non-fatal problems from artwork providers.</summary>
+    public string? LoadWarning
+    {
+        get => _loadWarning;
+        private set => SetProperty(ref _loadWarning, value);
+    }
+
+    /// <summary>True when no provider returned any artwork; the game can still be added.</summary>
+    public bool HasNoArtwork
+    {
+        get => _hasNoArtwork;
+        private set => SetProperty(ref _hasNoArtwork, value);
+    }
+
+    /// <summary>"Icon, Grid, Cover" — a running summary of what will be applied.</summary>
+    public string SelectionSummary
+    {
+        get
+        {
+            var chosen = Sections
+                .Where(s => s.HasSelection)
+                .Select(s => ArtworkTypeInfo.Label(s.Type).ToLowerInvariant())
+                .ToList();
+
+            return chosen.Count == 0
+                ? "No artwork selected"
+                : $"{chosen.Count} selected: {string.Join(", ", chosen)}";
+        }
+    }
+
+    public bool CanCommit => !IsLoading && !IsCommitting && !string.IsNullOrWhiteSpace(DisplayName) && _steamUser is not null;
+
+    /// <summary>Shown when Steam could not be found, since nothing can be written without it.</summary>
+    public string? SteamProblem { get; private set; }
+
+    public bool HasSteamProblem => SteamProblem is not null;
+
+    /// <summary>True when Steam is running, which means changes only appear after a restart.</summary>
+    public bool IsSteamRunning { get; private set; }
+
+    public string? SteamAccountLabel => _steamUser?.DisplayLabel;
+
+    public bool IsDuplicatePromptOpen
+    {
+        get => _isDuplicatePromptOpen;
+        private set => SetProperty(ref _isDuplicatePromptOpen, value);
+    }
+
+    /// <summary>Message explaining what already exists in the library.</summary>
+    public string DuplicateMessage => _existingEntry is { } entry
+        ? entry.MatchKind switch
+        {
+            DuplicateMatch.SameExecutable =>
+                $"\"{entry.Shortcut.AppName}\" already points at this game in your Steam library.",
+            DuplicateMatch.SameAppId =>
+                $"\"{entry.Shortcut.AppName}\" already occupies this entry in your Steam library.",
+            _ => $"\"{entry.Shortcut.AppName}\" already exists in your Steam library.",
+        }
+        : string.Empty;
+
+    public ICommand BackCommand { get; }
+    public ICommand AddToSteamCommand { get; }
+    public ICommand ChooseUpdateArtworkCommand { get; }
+    public ICommand ChooseReplaceEntryCommand { get; }
+    public ICommand CancelDuplicateCommand { get; }
+
+    /// <summary>Locates Steam and fetches artwork. Both run as soon as the page appears.</summary>
+    public async void BeginLoading()
+    {
+        IsLoading = true;
+        DetectSteam();
 
         try
         {
-            if (!await shell.Services.Steam.ShutdownSteamAsync(installation).ConfigureAwait(true))
+            var aggregator = _services.CreateArtworkAggregator(_local.Target);
+            var collection = await aggregator.CollectAsync(_game).ConfigureAwait(true);
+
+            Sections.Clear();
+
+            foreach (var section in collection.Sections)
             {
-                ErrorMessage = "Steam did not close. Close it manually and try again.";
-                return;
+                var viewModel = new ArtworkSectionViewModel(section, _services.ImageLoader);
+                viewModel.SelectionChanged += (_, _) => OnPropertyChanged(nameof(SelectionSummary));
+
+                // The top result is preselected so the common case is a single click on
+                // "Add to Steam"; the user can clear it by clicking the tile again.
+                viewModel.SelectTopRecommendation();
+
+                Sections.Add(viewModel);
             }
 
-            SteamIsRunning = false;
+            HasNoArtwork = Sections.Count == 0;
+            OnPropertyChanged(nameof(SelectionSummary));
+
+            LoadWarning = collection.Failures.Count == 0
+                ? BuildMissingProviderHint()
+                : $"{string.Join(", ", collection.Failures.Select(f => f.Provider))} could not be reached, so fewer options are shown.";
+        }
+        catch (Exception ex)
+        {
+            _shell.ShowError($"Could not load artwork: {ex.Message}");
         }
         finally
         {
-            IsBusy = false;
-            BusyMessage = null;
+            IsLoading = false;
+        }
+    }
+
+    /// <summary>Nudges the user toward a SteamGridDB key when artwork is thin without one.</summary>
+    private string? BuildMissingProviderHint()
+    {
+        if (_services.Providers.HasSteamGridDbKey) return null;
+
+        return "Add a free SteamGridDB key in Settings for many more artwork options.";
+    }
+
+    private void DetectSteam()
+    {
+        _installation = _services.SteamManager.FindSteamInstallation(_services.Settings.SteamPathOverride);
+
+        if (_installation is null)
+        {
+            SteamProblem = "Nama could not find your Steam installation. Set the path in Settings.";
+        }
+        else
+        {
+            _steamUser = _services.SteamManager.FindLibraryData(
+                _installation, _services.Settings.PreferredSteamUserId);
+
+            SteamProblem = _steamUser is null
+                ? "Nama found Steam but no logged-in user profile. Sign in to Steam once, then try again."
+                : null;
         }
 
-        await WriteAsync(Duplicate is not null ? DuplicateAction.UpdateArtwork : DuplicateAction.Fail)
+        IsSteamRunning = SteamInstallation.IsSteamRunning();
+
+        OnPropertyChanged(nameof(SteamProblem));
+        OnPropertyChanged(nameof(HasSteamProblem));
+        OnPropertyChanged(nameof(IsSteamRunning));
+        OnPropertyChanged(nameof(SteamAccountLabel));
+        OnPropertyChanged(nameof(CanCommit));
+    }
+
+    /// <summary>
+    /// Writes the shortcut and artwork. Checks for an existing entry first and hands the
+    /// decision to the user rather than ever creating a duplicate silently.
+    /// </summary>
+    private async Task CommitAsync()
+    {
+        if (_steamUser is null) return;
+
+        var name = DisplayName.Trim();
+        if (name.Length == 0) return;
+
+        try
+        {
+            // Ask about duplicates once; a resolved choice carries through the retry.
+            if (_resolution == DuplicateResolution.Pending)
+            {
+                _existingEntry = _services.SteamManager.DetectExistingEntry(
+                    _steamUser, _local.Target.ExecutablePath, name);
+
+                if (_existingEntry is not null)
+                {
+                    OnPropertyChanged(nameof(DuplicateMessage));
+                    IsDuplicatePromptOpen = true;
+                    return;
+                }
+            }
+
+            IsCommitting = true;
+
+            var selections = Sections
+                .Where(s => s.Selection is not null && ArtworkTypeInfo.SteamApplicable.Contains(s.Type))
+                .ToDictionary(s => s.Type, s => s.Selection!);
+
+            var result = await WriteToSteamAsync(_steamUser, name, selections).ConfigureAwait(true);
+
+            _shell.ShowSuccess(result, _local, _game);
+        }
+        catch (SteamException ex)
+        {
+            _shell.ShowError(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            _shell.ShowError($"Could not add the game to Steam: {ex.Message}");
+        }
+        finally
+        {
+            IsCommitting = false;
+        }
+    }
+
+    /// <summary>
+    /// Performs the actual writes. Artwork is applied before the shortcut is saved so the
+    /// icon path is already set when the entry lands in the file.
+    /// </summary>
+    private async Task<AddGameResult> WriteToSteamAsync(
+        SteamUser user,
+        string name,
+        Dictionary<ArtworkType, Artwork> selections)
+    {
+        var manager = _services.SteamManager;
+        var backup = _services.Settings.BackupShortcutsFile;
+
+        SteamShortcut shortcut;
+        ShortcutAction action;
+        int previousAppId;
+
+        if (_existingEntry is { } existing && _resolution == DuplicateResolution.UpdateArtwork)
+        {
+            // Keep the entry exactly as Steam has it; only the artwork changes.
+            shortcut = existing.Shortcut;
+            previousAppId = shortcut.AppId;
+            action = ShortcutAction.Updated;
+        }
+        else if (_existingEntry is { } replaced && _resolution == DuplicateResolution.ReplaceEntry)
+        {
+            previousAppId = replaced.Shortcut.AppId;
+            shortcut = SteamShortcut.Create(_local.Target.ExecutablePath, _local.Target.StartDirectory, name);
+            action = ShortcutAction.Updated;
+        }
+        else
+        {
+            shortcut = SteamShortcut.Create(_local.Target.ExecutablePath, _local.Target.StartDirectory, name);
+            previousAppId = shortcut.AppId;
+            action = ShortcutAction.Created;
+        }
+
+        var (applied, failed) = await manager
+            .ApplyArtworkAsync(user, shortcut, selections)
             .ConfigureAwait(true);
+
+        if (action == ShortcutAction.Created)
+            manager.AddShortcut(user, shortcut, backup);
+        else
+            manager.UpdateShortcut(user, shortcut, previousAppId, backup);
+
+        return new AddGameResult
+        {
+            Shortcut = shortcut,
+            Action = action,
+            AppliedArtwork = applied,
+            FailedArtwork = failed,
+            RequiresSteamRestart = SteamInstallation.IsSteamRunning(),
+        };
     }
 
-    private async Task WriteAsync(DuplicateAction onDuplicate)
+    private void ResolveDuplicate(DuplicateResolution resolution)
     {
-        if (shell.Extraction is null) return;
+        _resolution = resolution;
+        IsDuplicatePromptOpen = false;
 
-        IsBusy = true;
-        ErrorMessage = null;
-        BusyMessage = "Adding to Steam…";
-
-        try
-        {
-            var installation = shell.Services.Steam.FindSteamInstallation();
-            if (installation is null)
-            {
-                ErrorMessage = "Could not find your Steam installation.";
-                return;
-            }
-
-            var account = shell.Services.Steam.ResolveAccount(
-                shell.Services.Steam.FindLibraryData(installation),
-                shell.Services.Settings.PreferredSteamAccountId);
-
-            if (account is null)
-            {
-                ErrorMessage = "No Steam account was found to add the game to.";
-                return;
-            }
-
-            var request = new ShortcutRequest
-            {
-                ExecutablePath = shell.Extraction.ExecutablePath,
-                DisplayName = DisplayName.Trim(),
-                StartDirectory = shell.Extraction.StartDirectory,
-                Artwork = BuildSelections(),
-                OnDuplicate = onDuplicate,
-            };
-
-            var result = await shell.Services.Steam.AddOrUpdateShortcutAsync(
-                account, request, shell.Services.Downloader).ConfigureAwait(true);
-
-            if (result.Success)
-            {
-                Duplicate = null;
-                shell.SuccessStep.Show(DisplayName.Trim(), result, installation);
-                shell.ShowSuccess();
-                return;
-            }
-
-            // Each refusal is a decision for the user, not a dead end.
-            switch (result.BlockReason)
-            {
-                case WriteBlockReason.SteamRunning:
-                    SteamIsRunning = true;
-                    break;
-
-                default:
-                    if (result.ExistingEntry is not null) Duplicate = result.ExistingEntry;
-                    else ErrorMessage = result.Error;
-                    break;
-            }
-        }
-        catch (Exception e)
-        {
-            ErrorMessage = e.Message;
-        }
-        finally
-        {
-            IsBusy = false;
-            BusyMessage = null;
-        }
+        // Re-enter the commit path now that the decision is recorded.
+        if (AddToSteamCommand.CanExecute(null)) AddToSteamCommand.Execute(null);
     }
 
-    public void Clear()
+    private void CancelDuplicate()
     {
-        Sections.Clear();
-        DisplayName = string.Empty;
-        ErrorMessage = null;
-        NoticeMessage = null;
-        Duplicate = null;
-        SteamIsRunning = false;
-        HasArtwork = false;
+        IsDuplicatePromptOpen = false;
+        _resolution = DuplicateResolution.Pending;
+        _existingEntry = null;
     }
 }

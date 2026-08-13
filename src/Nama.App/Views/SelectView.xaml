@@ -1,0 +1,94 @@
+<UserControl x:Class="Nama.App.Views.SelectView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid Margin="40,20,40,40">
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520">
+
+            <TextBlock Text="Add a game to Steam"
+                       Style="{StaticResource Display}"
+                       HorizontalAlignment="Center" />
+
+            <TextBlock Text="Nama identifies the game, finds artwork, and creates the library entry."
+                       Style="{StaticResource Caption}"
+                       HorizontalAlignment="Center"
+                       TextAlignment="Center"
+                       Margin="0,10,0,0" />
+
+            <!-- Drop zone -->
+            <Border x:Name="DropZone"
+                    Height="200"
+                    Margin="0,32,0,0"
+                    CornerRadius="3"
+                    Background="{StaticResource SurfaceRaised}"
+                    BorderThickness="1.5">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsDragOver}" Value="True">
+                                <Setter Property="BorderBrush" Value="{StaticResource Accent}" />
+                                <Setter Property="Background" Value="{StaticResource AccentSoft}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+
+                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="&#xE8E5;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="30"
+                               Foreground="{StaticResource MutedText}"
+                               HorizontalAlignment="Center" />
+
+                    <TextBlock Text="Drop a game .exe or folder here"
+                               Style="{StaticResource Heading}"
+                               HorizontalAlignment="Center"
+                               Margin="0,14,0,0" />
+
+                    <TextBlock Text="or"
+                               Style="{StaticResource Caption}"
+                               HorizontalAlignment="Center"
+                               Margin="0,10,0,10" />
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button Content="Select Game"
+                                Style="{StaticResource AccentButton}"
+                                Command="{Binding BrowseExecutableCommand}" />
+
+                        <Button Content="Select Folder"
+                                Style="{StaticResource SecondaryButton}"
+                                Margin="8,0,0,0"
+                                Command="{Binding BrowseFolderCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Context menu hint, only while the shell integration is missing -->
+            <Border Margin="0,20,0,0"
+                    Padding="14,11"
+                    CornerRadius="3"
+                    Background="{StaticResource SurfaceRaised}"
+                    Visibility="{Binding ShowContextMenuHint, Converter={StaticResource BoolToVisibility}}">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Grid.Column="0"
+                               Style="{StaticResource Caption}"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               Text="Add Nama to the Explorer right-click menu to skip this screen." />
+
+                    <Button Grid.Column="1"
+                            Style="{StaticResource GhostButton}"
+                            Content="Settings"
+                            Command="{Binding OpenSettingsCommand}" />
+                </Grid>
+            </Border>
+
+        </StackPanel>
+    </Grid>
+</UserControl>

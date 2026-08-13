@@ -1,133 +1,155 @@
-using Nama.Core.Models;
 using Nama.Core.Normalization;
+using Xunit;
 
 namespace Nama.Tests;
 
 public class NameNormalizerTests
 {
-    // Isolated from %APPDATA% so a user override on the dev machine can never change
-    // test outcomes.
-    private static readonly NameNormalizer Normalizer =
-        new(NormalizationData.Load(Path.Combine(Path.GetTempPath(), "nama-tests-no-override")));
+    private readonly NameNormalizer _normalizer = new();
 
     [Theory]
-    // --- the three acceptance cases from the spec ---------------------------------
+    // The three worked examples from the product spec.
     [InlineData("ELDEN-RING-v1.12.2-FITGIRL", "Elden Ring")]
     [InlineData("White_Album_2_Closing_Chapter", "White Album 2 Closing Chapter")]
-    [InlineData("SubaHibiEN.exe", "Subarashiki Hibi")]
-    // --- version and release-group stripping ---------------------------------------
+    [InlineData("SubaHibiEN", "Subarashiki Hibi")]
+    // Common real-world shapes.
     [InlineData("White_Album_2-v1.04-FINAL", "White Album 2")]
-    [InlineData("Cyberpunk.2077.v2.1.DODI.Repack", "Cyberpunk 2077")]
-    [InlineData("Hades_II_v0.90.1_x64_Portable", "Hades II")]
-    [InlineData("DOOM.Eternal.Update.6.CODEX", "DOOM Eternal")]
-    [InlineData("Hollow Knight [FitGirl Repack]", "Hollow Knight")]
-    [InlineData("Stardew Valley (v1.6.8) [GOG]", "Stardew Valley")]
-    [InlineData("Baldurs-Gate-3-Build-4541000", "Baldurs Gate 3")]
-    // --- separators and punctuation -------------------------------------------------
-    [InlineData("Ori_and_the_Blind_Forest", "Ori and the Blind Forest")]
-    [InlineData("Sekiro.Shadows.Die.Twice", "Sekiro Shadows Die Twice")]
-    [InlineData("the~witness~", "The Witness")]
-    // --- title information that must NOT be destroyed --------------------------------
-    [InlineData("PC Building Simulator", "PC Building Simulator")]
-    [InlineData("Final Fantasy X", "Final Fantasy X")]
-    [InlineData("Football Manager 2024", "Football Manager 2024")]
-    [InlineData("The Last of Us Part II Remastered", "The Last of Us Part II Remastered")]
-    [InlineData("Portal 2", "Portal 2")]
-    // --- abbreviation and punctuation restoration ------------------------------------
-    [InlineData("SteinsGate.exe", "Steins;Gate")]
-    [InlineData("chaoschild", "Chaos;Child")]
-    [InlineData("Umineko", "Umineko no Naku Koro ni")]
-    [InlineData("DDLC.exe", "Doki Doki Literature Club")]
-    // --- real folder names from this machine ------------------------------------------
-    [InlineData("Konosuba Love for these Clothes of Desire!", "Konosuba Love for these Clothes of Desire!")]
-    [InlineData("The House in Fata Morgana", "The House in Fata Morgana")]
-    public void Normalizes_to_expected_display_name(string raw, string expected)
+    [InlineData("Cyberpunk.2077.v2.1.REPACK-DODI", "Cyberpunk 2077")]
+    [InlineData("Hades_v1.38290_[FitGirl]", "Hades")]
+    [InlineData("EldenRing-Win64-Shipping", "Elden Ring")]
+    [InlineData("DarkSouls3", "Dark Souls 3")]
+    [InlineData("stardew valley", "Stardew Valley")]
+    public void Normalize_produces_the_expected_title(string raw, string expected)
     {
-        var result = Normalizer.Normalize(raw);
+        var result = _normalizer.Normalize(raw);
+        Assert.Equal(expected, result.Normalized);
+    }
 
-        Assert.Equal(expected, result.DisplayName);
+    [Fact]
+    public void Normalize_strips_release_groups_and_versions_but_records_them()
+    {
+        var result = _normalizer.Normalize("ELDEN-RING-v1.12.2-FITGIRL");
+
+        Assert.Equal("Elden Ring", result.Normalized);
+        Assert.Contains(result.RemovedTokens, t => t.Contains("1.12.2"));
+        Assert.Contains(result.RemovedTokens, t => t.Equals("FITGIRL", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Normalize_keeps_the_raw_input_for_display()
+    {
+        const string raw = "ELDEN-RING-v1.12.2-FITGIRL";
+        Assert.Equal(raw, _normalizer.Normalize(raw).Raw);
+    }
+
+    [Fact]
+    public void Normalize_offers_the_base_title_as_a_fallback_candidate()
+    {
+        var result = _normalizer.Normalize("White Album 2 Closing Chapter");
+
+        // Providers frequently index only the base title, so it must be searched too.
+        Assert.Contains("White Album", result.Candidates);
+    }
+
+    [Fact]
+    public void Normalize_expands_abbreviations_but_keeps_the_literal_reading()
+    {
+        var result = _normalizer.Normalize("SubaHibiEN");
+
+        Assert.Equal("Subarashiki Hibi", result.Normalized);
+        Assert.Contains("Suba Hibi", result.Candidates);
+    }
+
+    [Fact]
+    public void Normalize_preserves_a_fully_Japanese_title_untouched()
+    {
+        var result = _normalizer.Normalize("素晴らしき日々");
+
+        Assert.True(result.ContainsCjk);
+        Assert.Equal("素晴らしき日々", result.Normalized);
     }
 
     [Theory]
-    [InlineData("ホワイトアルバム2")]
-    [InlineData("素晴らしき日々")]
-    public void Preserves_japanese_titles_verbatim(string raw)
+    // Words like "Game", "HD" and "Complete" describe packaging *and* appear in real
+    // titles. Stripping them outright turned "There Is No Game" into "There Is No".
+    [InlineData("There Is No Game", "There Is No Game")]
+    [InlineData("The Game", "The Game")]
+    [InlineData("Devil May Cry HD Collection", "Devil May Cry HD Collection")]
+    [InlineData("Horizon Forbidden West Complete Edition", "Horizon Forbidden West Complete Edition")]
+    [InlineData("Game Dev Tycoon", "Game Dev Tycoon")]
+    [InlineData("Final Fantasy VII Remake", "Final Fantasy VII Remake")]
+    public void Normalize_keeps_noise_words_that_are_part_of_the_title(string raw, string expected)
     {
-        var result = Normalizer.Normalize(raw);
-
-        Assert.True(result.HasCjk);
-        Assert.Contains(raw, result.CandidateValues);
-        // Title-casing must never touch CJK.
-        Assert.Equal(raw, result.DisplayName);
+        Assert.Equal(expected, _normalizer.Normalize(raw).Normalized);
     }
 
     [Fact]
-    public void Extracts_japanese_run_from_a_mixed_name()
+    public void Normalize_offers_the_trimmed_form_as_a_fallback_candidate()
     {
-        var result = Normalizer.Normalize("ホワイトアルバム2 White Album 2");
+        // The padded title leads, but a database that indexes the bare name is still reachable.
+        var result = _normalizer.Normalize("There Is No Game");
 
-        Assert.Contains("ホワイトアルバム2", result.CandidateValues);
-        Assert.Contains(result.Candidates, c => c.Kind == NameCandidateKind.Cjk);
+        Assert.Equal("There Is No Game", result.Candidates[0]);
+        Assert.Contains("There Is No", result.Candidates);
+    }
+
+    [Theory]
+    // A bare "V<n>" in the middle of a title is part of the name, not a build number.
+    [InlineData("Danganronpa V3 Killing Harmony", "Danganronpa V3 Killing Harmony")]
+    [InlineData("Danganronpa_V3_Killing_Harmony-CODEX", "Danganronpa V3 Killing Harmony")]
+    public void Normalize_does_not_mistake_a_title_number_for_a_version(string raw, string expected)
+    {
+        Assert.Equal(expected, _normalizer.Normalize(raw).Normalized);
+    }
+
+    [Theory]
+    // Genuine version strings must still go.
+    [InlineData("Hades_v1.38290", "Hades")]
+    [InlineData("Some Game v2", "Some Game")]
+    [InlineData("Stardew Valley 1.6.9", "Stardew Valley")]
+    public void Normalize_still_removes_real_version_strings(string raw, string expected)
+    {
+        Assert.Equal(expected, _normalizer.Normalize(raw).Normalized);
     }
 
     [Fact]
-    public void Keeps_a_lower_weighted_candidate_without_edition_markers()
+    public void Normalize_does_not_destroy_a_title_that_is_itself_a_noise_word()
     {
-        var result = Normalizer.Normalize("Elden Ring Deluxe Edition");
-
-        // The primary keeps the edition, because dropping it could pick the wrong game...
-        Assert.Equal("Elden Ring Deluxe Edition", result.DisplayName);
-        // ...but the stripped form is still searchable.
-        Assert.Contains("Elden Ring", result.CandidateValues);
+        // "Portal" and "Control" are real games whose names appear in the noise list.
+        Assert.Equal("Portal", _normalizer.Normalize("Portal").Normalized);
+        Assert.Equal("Control", _normalizer.Normalize("Control").Normalized);
     }
 
     [Fact]
-    public void Never_normalizes_away_the_entire_name()
+    public void Normalize_falls_back_to_the_raw_name_when_everything_is_noise()
     {
-        // Every token is noise. Stripping them all would leave nothing to search for.
-        var result = Normalizer.Normalize("setup.exe");
+        var result = _normalizer.Normalize("setup_installer_x64");
 
+        Assert.True(result.IsFallback);
         Assert.False(string.IsNullOrWhiteSpace(result.Normalized));
-        Assert.NotEmpty(result.Candidates);
     }
 
     [Fact]
-    public void Records_what_it_removed_so_a_bad_match_can_be_explained()
+    public void Normalize_preserves_stylized_and_acronym_casing_in_mixed_case_names()
     {
-        var result = Normalizer.Normalize("ELDEN-RING-v1.12.2-FITGIRL");
-
-        Assert.Contains("v1.12.2", result.RemovedTokens);
-        Assert.Contains("FITGIRL", result.RemovedTokens);
+        Assert.Equal("NieR Automata", _normalizer.Normalize("NieR Automata").Normalized);
+        Assert.Equal("Final Fantasy XIV", _normalizer.Normalize("Final Fantasy XIV").Normalized);
     }
 
     [Fact]
-    public void Retains_the_raw_input_untouched()
+    public void Normalize_handles_empty_input()
     {
-        const string raw = "  ELDEN-RING-v1.12.2-FITGIRL  ";
-
-        Assert.Equal(raw, Normalizer.Normalize(raw).Raw);
+        Assert.Equal(string.Empty, _normalizer.Normalize(null).Normalized);
+        Assert.Equal(string.Empty, _normalizer.Normalize("   ").Normalized);
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void Handles_empty_input_without_throwing(string? raw)
+    [InlineData("Elden Ring", "elden-ring")]
+    [InlineData("Elden Ring", "ELDEN_RING")]
+    [InlineData("Muv-Luv", "Muv Luv")]
+    [InlineData("Pokémon", "Pokemon")]
+    public void MatchKey_ignores_punctuation_spacing_case_and_accents(string a, string b)
     {
-        var result = Normalizer.Normalize(raw);
-
-        Assert.NotNull(result);
-        Assert.Equal(raw ?? string.Empty, result.Raw);
-    }
-
-    [Fact]
-    public void Candidates_are_ordered_by_weight_and_deduplicated()
-    {
-        var result = Normalizer.Normalize("SteinsGate.exe");
-
-        Assert.Equal(result.Candidates.OrderByDescending(c => c.Weight), result.Candidates);
-        Assert.Equal(
-            result.Candidates.Select(c => TextTools.Compact(c.Value)).Distinct().Count(),
-            result.Candidates.Count);
+        Assert.Equal(NameNormalizer.BuildMatchKey(a), NameNormalizer.BuildMatchKey(b));
     }
 }

@@ -1,0 +1,177 @@
+<UserControl x:Class="Nama.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Border Background="{StaticResource SurfaceRaised}"
+            BorderBrush="{StaticResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="3">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Row="0"
+                       Text="Settings"
+                       Style="{StaticResource Display}"
+                       FontSize="20"
+                       Margin="28,24,28,0" />
+
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,20,0,0" Padding="28,0,20,0">
+                <StackPanel>
+
+                    <!-- Explorer integration -->
+                    <TextBlock Text="EXPLORER INTEGRATION" Style="{StaticResource SectionLabel}" />
+
+                    <TextBlock Text="{Binding ContextMenuHint}"
+                               Style="{StaticResource Caption}"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,10" />
+
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Add to right-click menu"
+                                Style="{StaticResource SecondaryButton}"
+                                Padding="14,8"
+                                Command="{Binding InstallContextMenuCommand}"
+                                Visibility="{Binding ContextMenuInstalled, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}" />
+
+                        <Button Content="Remove from right-click menu"
+                                Style="{StaticResource SecondaryButton}"
+                                Padding="14,8"
+                                Command="{Binding RemoveContextMenuCommand}"
+                                Visibility="{Binding ContextMenuInstalled, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+
+                    <!-- Providers -->
+                    <TextBlock Text="PROVIDERS" Style="{StaticResource SectionLabel}" Margin="0,28,0,10" />
+
+                    <ItemsControl ItemsSource="{Binding Providers}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="{Binding DisplayName}" Style="{StaticResource Body}" />
+                                        <TextBlock Text="{Binding Requirement}"
+                                                   Style="{StaticResource Caption}"
+                                                   FontSize="11"
+                                                   Margin="0,2,0,0"
+                                                   Visibility="{Binding Requirement, Converter={StaticResource StringToVisibility}}" />
+                                    </StackPanel>
+
+                                    <CheckBox Grid.Column="1"
+                                              Style="{StaticResource Switch}"
+                                              VerticalAlignment="Center"
+                                              IsChecked="{Binding IsEnabled, Mode=TwoWay}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <!-- SteamGridDB key -->
+                    <TextBlock Text="STEAMGRIDDB API KEY" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
+
+                    <TextBox Style="{StaticResource Field}"
+                             FontSize="13"
+                             Text="{Binding SteamGridDbApiKey, UpdateSourceTrigger=LostFocus}" />
+
+                    <Button Content="Get a free key →"
+                            Style="{StaticResource GhostButton}"
+                            HorizontalAlignment="Left"
+                            Margin="-12,4,0,0"
+                            Command="{Binding OpenSteamGridDbKeyPageCommand}" />
+
+                    <!-- IGDB credentials -->
+                    <TextBlock Text="IGDB (OPTIONAL)" Style="{StaticResource SectionLabel}" Margin="0,20,0,8" />
+
+                    <TextBox Style="{StaticResource Field}"
+                             FontSize="13"
+                             Text="{Binding IgdbClientId, UpdateSourceTrigger=LostFocus}"
+                             ToolTip="Twitch client ID" />
+
+                    <TextBox Style="{StaticResource Field}"
+                             FontSize="13"
+                             Margin="0,8,0,0"
+                             Text="{Binding IgdbClientSecret, UpdateSourceTrigger=LostFocus}"
+                             ToolTip="Twitch client secret" />
+
+                    <!-- Steam path -->
+                    <TextBlock Text="STEAM FOLDER" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <TextBox Grid.Column="0"
+                                 Style="{StaticResource Field}"
+                                 FontSize="13"
+                                 Text="{Binding SteamPathOverride, UpdateSourceTrigger=LostFocus}" />
+
+                        <Button Grid.Column="1"
+                                Content="Browse"
+                                Style="{StaticResource SecondaryButton}"
+                                Padding="14,8"
+                                Margin="8,0,0,0"
+                                Command="{Binding BrowseSteamPathCommand}" />
+                    </Grid>
+
+                    <TextBlock Text="Leave empty to detect Steam automatically."
+                               Style="{StaticResource Caption}"
+                               FontSize="11"
+                               Margin="0,6,0,0" />
+
+                    <!-- About: trademark posture stated plainly. -->
+                    <TextBlock Text="ABOUT" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
+
+                    <TextBlock Style="{StaticResource Caption}"
+                               FontSize="11"
+                               TextWrapping="Wrap"
+                               Text="Nama is an independent, unofficial tool. It is not affiliated with, endorsed by, or sponsored by Valve Corporation. Steam is a trademark of Valve Corporation." />
+
+                    <!-- Cache -->
+                    <TextBlock Text="CACHE" Style="{StaticResource SectionLabel}" Margin="0,24,0,8" />
+
+                    <Grid Margin="0,0,0,20">
+                        <TextBlock Style="{StaticResource Caption}"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding CacheSize, StringFormat='Cached images: {0}'}" />
+
+                        <Button Content="Clear cache"
+                                Style="{StaticResource SecondaryButton}"
+                                Padding="14,8"
+                                HorizontalAlignment="Right"
+                                Command="{Binding ClearCacheCommand}" />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="2"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0"
+                    Padding="28,16">
+                <Grid>
+                    <TextBlock Style="{StaticResource Caption}"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"
+                               MaxWidth="330"
+                               HorizontalAlignment="Left"
+                               Text="{Binding Status}" />
+
+                    <Button Content="Done"
+                            Style="{StaticResource AccentButton}"
+                            MinWidth="100"
+                            HorizontalAlignment="Right"
+                            Command="{Binding CloseCommand}" />
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</UserControl>
