@@ -138,7 +138,7 @@ public sealed class ArtworkViewModel : ObservableObject
 
     public bool HasSteamProblem => SteamProblem is not null;
 
-    /// <summary>True when Steam is running, which means changes only appear after a restart.</summary>
+    /// <summary>True when Steam is running, which prevents safe VDF changes.</summary>
     public bool IsSteamRunning { get; private set; }
 
     public string? SteamAccountLabel => _steamUser?.DisplayLabel;
@@ -235,7 +235,9 @@ public sealed class ArtworkViewModel : ObservableObject
                 : null;
         }
 
-        IsSteamRunning = SteamInstallation.IsSteamRunning();
+        IsSteamRunning = _services.SteamManager.IsSteamRunning();
+        if (SteamProblem is null && IsSteamRunning)
+            SteamProblem = "Steam is open. Exit it completely before Nama writes the shortcut or artwork.";
 
         OnPropertyChanged(nameof(SteamProblem));
         OnPropertyChanged(nameof(HasSteamProblem));
@@ -257,6 +259,10 @@ public sealed class ArtworkViewModel : ObservableObject
 
         try
         {
+            // Check before duplicate detection, downloads, or artwork writes. Steam keeps
+            // shortcuts.vdf in memory and can overwrite an external edit when it exits.
+            _services.SteamManager.EnsureSteamIsStopped();
+
             // Ask about duplicates once; a resolved choice carries through the retry.
             if (_resolution == DuplicateResolution.Pending)
             {
@@ -322,6 +328,7 @@ public sealed class ArtworkViewModel : ObservableObject
         {
             previousAppId = replaced.Shortcut.AppId;
             shortcut = SteamShortcut.Create(_local.Target.ExecutablePath, _local.Target.StartDirectory, name);
+            shortcut.AppId = previousAppId;
             action = ShortcutAction.Updated;
         }
         else
@@ -346,7 +353,6 @@ public sealed class ArtworkViewModel : ObservableObject
             Action = action,
             AppliedArtwork = applied,
             FailedArtwork = failed,
-            RequiresSteamRestart = SteamInstallation.IsSteamRunning(),
         };
     }
 

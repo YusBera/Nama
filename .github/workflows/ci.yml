@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "rebuild/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: windows-2025
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Nama.slnx
+
+      - name: Build
+        run: dotnet build Nama.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Nama.slnx --configuration Release --no-build --logger "trx;LogFileName=tests.trx" --results-directory TestResults
+
+      - name: Upload test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+          if-no-files-found: ignore

@@ -13,14 +13,34 @@ public sealed class SteamException(string message, Exception? inner = null) : Ex
 public sealed class SteamManager
 {
     private readonly Func<string, CancellationToken, Task<byte[]?>> _downloadImage;
+    private readonly Func<bool> _isSteamRunning;
 
     /// <param name="downloadImage">
     /// Fetches image bytes for a URL. Injected so this project stays free of HTTP
     /// concerns and can be tested without a network.
     /// </param>
-    public SteamManager(Func<string, CancellationToken, Task<byte[]?>> downloadImage)
+    public SteamManager(
+        Func<string, CancellationToken, Task<byte[]?>> downloadImage,
+        Func<bool>? isSteamRunning = null)
     {
         _downloadImage = downloadImage;
+        _isSteamRunning = isSteamRunning ?? SteamInstallation.IsSteamRunning;
+    }
+
+    /// <summary>True when a Steam client process is currently running.</summary>
+    public bool IsSteamRunning() => _isSteamRunning();
+
+    /// <summary>
+    /// Refuses an on-disk mutation while Steam can overwrite <c>shortcuts.vdf</c> from
+    /// its in-memory copy on exit.
+    /// </summary>
+    /// <exception cref="SteamException">Steam is running.</exception>
+    public void EnsureSteamIsStopped()
+    {
+        if (IsSteamRunning())
+            throw new SteamException(
+                "Steam is currently running. Exit Steam completely, then try again. " +
+                "Nama will not modify shortcuts.vdf while Steam can overwrite it.");
     }
 
     /// <summary>Locates Steam, or returns null when it is not installed.</summary>
@@ -108,9 +128,10 @@ public sealed class SteamManager
     /// <summary>Appends a shortcut. Callers must resolve duplicates first.</summary>
     public void AddShortcut(SteamUser user, SteamShortcut shortcut, bool backup = true)
     {
+        EnsureSteamIsStopped();
         var (root, list) = LoadShortcutsDocument(user);
 
-        shortcut.RefreshAppId();
+        if (shortcut.AppId == 0) shortcut.AssignDeterministicAppId();
         list.Add(NextIndex(list).ToString(), shortcut.ToVdf());
 
         WriteShortcutsDocument(user, root, backup);
@@ -120,11 +141,12 @@ public sealed class SteamManager
     /// Replaces the entry whose app id matches <paramref name="shortcut"/>'s previous id.
     /// </summary>
     /// <param name="previousAppId">
-    /// The app id before any rename. Renaming changes the computed id, so the old value is
-    /// needed to find the entry.
+    /// The authoritative app id of the entry being replaced. It is retained across a rename
+    /// so Steam play history and artwork remain attached to the same shortcut.
     /// </param>
     public void UpdateShortcut(SteamUser user, SteamShortcut shortcut, int previousAppId, bool backup = true)
     {
+        EnsureSteamIsStopped();
         var (root, list) = LoadShortcutsDocument(user);
 
         var replaced = false;
@@ -141,9 +163,10 @@ public sealed class SteamManager
                 (existing.AppId == previousAppId ||
                  PathsEqual(existing.ExePathUnquoted, shortcut.ExePathUnquoted)))
             {
-                // Carry over play history so updating artwork does not reset the entry.
+                // The stored id is authoritative. Keep it and the play history so a rename
+                // does not detach Steam's metadata or artwork from the shortcut.
+                shortcut.AppId = existing.AppId;
                 shortcut.LastPlayTime = existing.LastPlayTime;
-                shortcut.RefreshAppId();
                 rebuilt.Add((index++).ToString(), shortcut.ToVdf());
                 replaced = true;
                 continue;
@@ -154,7 +177,7 @@ public sealed class SteamManager
 
         if (!replaced)
         {
-            shortcut.RefreshAppId();
+            if (shortcut.AppId == 0) shortcut.AssignDeterministicAppId();
             rebuilt.Add((index).ToString(), shortcut.ToVdf());
         }
 
@@ -166,6 +189,7 @@ public sealed class SteamManager
     /// <returns>True when an entry was removed.</returns>
     public bool RemoveShortcut(SteamUser user, int appId, bool backup = true)
     {
+        EnsureSteamIsStopped();
         var (root, list) = LoadShortcutsDocument(user);
 
         var rebuilt = VdfNode.NewObject();
@@ -204,6 +228,8 @@ public sealed class SteamManager
             IReadOnlyDictionary<ArtworkType, Artwork> selections,
             CancellationToken ct = default)
     {
+        EnsureSteamIsStopped();
+
         var applied = new List<ArtworkType>();
         var failed = new List<(ArtworkType, string)>();
 
@@ -233,6 +259,10 @@ public sealed class SteamManager
 
                 var extension = ExtensionFor(artwork.Url);
                 var path = Path.Combine(user.GridPath, GridFileName(shortcut.ArtworkId, type, extension));
+
+                // The download may have taken long enough for Steam to be started after
+                // the initial check. Re-check immediately before touching its files.
+                EnsureSteamIsStopped();
 
                 // Steam picks whichever extension it finds first, so stale variants of the
                 // same artwork slot must go or they can win over the new file.
@@ -334,12 +364,13 @@ public sealed class SteamManager
     }
 
     /// <summary>
-    /// Writes the document atomically, keeping a one-generation backup. Steam holds this
-    /// file in memory while running and rewrites it on exit, which is why the caller is
-    /// told to restart Steam.
+    /// Writes the document atomically, keeping a one-generation backup. Public mutation
+    /// methods verify that Steam is stopped before reaching this boundary.
     /// </summary>
-    private static void WriteShortcutsDocument(SteamUser user, VdfNode root, bool backup)
+    private void WriteShortcutsDocument(SteamUser user, VdfNode root, bool backup)
     {
+        // Close the check/write window as much as process-based coordination permits.
+        EnsureSteamIsStopped();
         var bytes = BinaryVdf.Serialize(root);
 
         try

@@ -29,7 +29,9 @@ public sealed class SteamManagerTests : IDisposable
         };
 
         // Stand-in downloader so no network is involved.
-        _manager = new SteamManager((_, _) => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes("png-bytes")));
+        _manager = new SteamManager(
+            (_, _) => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes("png-bytes")),
+            () => false);
     }
 
     [Fact]
@@ -104,6 +106,8 @@ public sealed class SteamManagerTests : IDisposable
 
         var stored = Assert.Single(_manager.GetExistingShortcuts(_user));
         Assert.Equal("New Name", stored.AppName);
+        Assert.Equal(original.AppId, stored.AppId);
+        Assert.Equal(original.AppId, renamed.AppId);
     }
 
     [Fact]
@@ -219,7 +223,7 @@ public sealed class SteamManagerTests : IDisposable
     [Fact]
     public async Task Reports_artwork_that_could_not_be_downloaded()
     {
-        var manager = new SteamManager((_, _) => Task.FromResult<byte[]?>(null));
+        var manager = new SteamManager((_, _) => Task.FromResult<byte[]?>(null), () => false);
         var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
 
         var (applied, failed) = await manager.ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
@@ -249,6 +253,59 @@ public sealed class SteamManagerTests : IDisposable
         Assert.Contains("not in the expected format", ex.Message);
     }
 
+    [Fact]
+    public void Refuses_to_add_while_Steam_is_running_without_creating_a_file()
+    {
+        var manager = RunningManager();
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+
+        var ex = Assert.Throws<SteamException>(() => manager.AddShortcut(_user, shortcut, backup: false));
+
+        Assert.Contains("Exit Steam completely", ex.Message);
+        Assert.False(File.Exists(_user.ShortcutsFile));
+    }
+
+    [Fact]
+    public void Refuses_to_update_while_Steam_is_running_without_changing_the_file()
+    {
+        var original = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Old Name");
+        _manager.AddShortcut(_user, original, backup: false);
+        var before = File.ReadAllBytes(_user.ShortcutsFile);
+
+        var replacement = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "New Name");
+        Assert.Throws<SteamException>(() =>
+            RunningManager().UpdateShortcut(_user, replacement, original.AppId, backup: false));
+
+        Assert.Equal(before, File.ReadAllBytes(_user.ShortcutsFile));
+    }
+
+    [Fact]
+    public void Refuses_to_remove_while_Steam_is_running_without_changing_the_file()
+    {
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+        _manager.AddShortcut(_user, shortcut, backup: false);
+        var before = File.ReadAllBytes(_user.ShortcutsFile);
+
+        Assert.Throws<SteamException>(() =>
+            RunningManager().RemoveShortcut(_user, shortcut.AppId, backup: false));
+
+        Assert.Equal(before, File.ReadAllBytes(_user.ShortcutsFile));
+    }
+
+    [Fact]
+    public async Task Refuses_to_write_artwork_while_Steam_is_running()
+    {
+        var shortcut = SteamShortcut.Create(@"D:\Games\g.exe", @"D:\Games", "Game");
+
+        await Assert.ThrowsAsync<SteamException>(() =>
+            RunningManager().ApplyArtworkAsync(_user, shortcut, new Dictionary<ArtworkType, Artwork>
+            {
+                [ArtworkType.Grid] = Art(ArtworkType.Grid, "https://example.test/a.png"),
+            }));
+
+        Assert.False(Directory.Exists(_user.GridPath));
+    }
+
     [Theory]
     [InlineData(ArtworkType.Grid, "123.png")]
     [InlineData(ArtworkType.Cover, "123p.png")]
@@ -269,6 +326,10 @@ public sealed class SteamManagerTests : IDisposable
         Width = 600,
         Height = 900,
     };
+
+    private static SteamManager RunningManager() => new(
+        (_, _) => Task.FromResult<byte[]?>(Encoding.UTF8.GetBytes("png-bytes")),
+        () => true);
 
     public void Dispose()
     {

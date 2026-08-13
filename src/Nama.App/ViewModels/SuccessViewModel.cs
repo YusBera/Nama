@@ -59,15 +59,6 @@ public sealed class SuccessViewModel : ObservableObject
 
     public bool HasAppliedArtwork => AppliedArtwork.Count > 0;
 
-    /// <summary>
-    /// Steam caches shortcuts in memory and rewrites the file when it exits, so a running
-    /// client would overwrite what Nama just wrote unless it is restarted.
-    /// </summary>
-    public bool RequiresSteamRestart => _result.RequiresSteamRestart;
-
-    public string RestartMessage =>
-        "Steam is running. Restart Steam for the new entry and artwork to appear.";
-
     public ICommand DoneCommand { get; }
     public ICommand AddAnotherCommand { get; }
     public ICommand OpenSteamCommand { get; }

@@ -9,6 +9,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <AssemblyName>Nama</AssemblyName>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
