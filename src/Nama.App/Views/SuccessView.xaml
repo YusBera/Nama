@@ -79,17 +79,6 @@
                 </StackPanel>
             </Border>
 
-            <!-- Steam restart notice -->
-            <Border Background="{StaticResource SurfaceOverlay}"
-                    CornerRadius="3"
-                    Padding="16,12"
-                    Margin="0,12,0,0"
-                    Visibility="{Binding RequiresSteamRestart, Converter={StaticResource BoolToVisibility}}">
-                <TextBlock Text="{Binding RestartMessage}"
-                           Style="{StaticResource Caption}"
-                           TextWrapping="Wrap" />
-            </Border>
-
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,28,0,0">
                 <Button Content="Done"
                         Style="{StaticResource SecondaryButton}"

@@ -2,6 +2,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Nama.App.Services;
 using Nama.App.ViewModels;
+using Nama.App.WindowsIntegration;
 
 namespace Nama.App;
 
@@ -17,6 +18,14 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // The installer uses the same registry implementation as the Settings screen.
+        // These maintenance commands deliberately run without showing the application UI.
+        if (TryRunMaintenanceCommand(e.Args, out var exitCode))
+        {
+            Shutdown(exitCode);
+            return;
+        }
+
         // A crash dialog is friendlier than a silent disappearance, and Nama is a
         // utility the user launched for one specific task.
         DispatcherUnhandledException += OnUnhandledException;
@@ -30,6 +39,26 @@ public partial class App : Application
         window.Show();
 
         shell.Start(ExtractPath(e.Args));
+    }
+
+    private static bool TryRunMaintenanceCommand(string[] args, out int exitCode)
+    {
+        exitCode = 0;
+        var install = args.Contains("--install-context-menu", StringComparer.OrdinalIgnoreCase);
+        var uninstall = args.Contains("--uninstall-context-menu", StringComparer.OrdinalIgnoreCase);
+        if (!install && !uninstall) return false;
+
+        try
+        {
+            if (install) ContextMenuInstaller.Install();
+            else ContextMenuInstaller.Uninstall();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or UnauthorizedAccessException)
+        {
+            exitCode = 1;
+        }
+
+        return true;
     }
 
     /// <summary>

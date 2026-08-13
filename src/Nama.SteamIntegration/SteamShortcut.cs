@@ -44,8 +44,11 @@ public sealed class SteamShortcut
     /// <summary>Target path with Steam's surrounding quotes removed.</summary>
     public string ExePathUnquoted => Exe.Trim().Trim('"');
 
-    /// <summary>Recomputes <see cref="AppId"/> from the current target and name.</summary>
-    public void RefreshAppId() => AppId = SteamAppIds.ComputeShortcutAppIdSigned(Exe, AppName);
+    /// <summary>
+    /// Assigns the deterministic id Nama uses for a new VDF shortcut. An id read from
+    /// Steam is authoritative and must not be recomputed during an update or rename.
+    /// </summary>
+    public void AssignDeterministicAppId() => AppId = SteamAppIds.ComputeShortcutAppIdSigned(Exe, AppName);
 
     /// <summary>Builds a shortcut for a local game, filling in Steam's usual defaults.</summary>
     public static SteamShortcut Create(string executablePath, string startDirectory, string displayName)
@@ -63,7 +66,7 @@ public sealed class SteamShortcut
             Tags = [],
         };
 
-        shortcut.RefreshAppId();
+        shortcut.AssignDeterministicAppId();
         return shortcut;
     }
 
@@ -177,6 +180,4 @@ public sealed class AddGameResult
     /// <summary>Artwork types that were selected but could not be written, with the reason.</summary>
     public IReadOnlyList<(ArtworkType Type, string Reason)> FailedArtwork { get; init; } = [];
 
-    /// <summary>True when Steam was running, meaning the user must restart it to see changes.</summary>
-    public bool RequiresSteamRestart { get; init; }
 }

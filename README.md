@@ -13,7 +13,8 @@ Right-click EXE → Nama → Confirm game → Pick artwork → Add to Steam
 **Status:** early but functional. The MVP flow works end to end — identification,
 artwork selection, shortcut creation, duplicate handling and artwork application have all
 been exercised against the live Steam, SteamGridDB and VNDB services and against a real
-`shortcuts.vdf`. Requires Windows 10/11 and the .NET 10 runtime.
+`shortcuts.vdf`. Requires Windows 10/11. Release installers bundle the .NET runtime;
+building from source requires the .NET 10 SDK.
 
 ## The flow
 
@@ -27,7 +28,7 @@ been exercised against the live Steam, SteamGridDB and VNDB services and against
    executable — is merged into one picker, five recommended results per category,
    `Show more ↓` to see the rest.
 7. You optionally edit the Steam display name.
-8. Nama writes the shortcut and the artwork, and tells you if Steam needs a restart.
+8. With Steam fully exited, Nama writes the shortcut and selected artwork safely.
 
 ## Name normalization
 
@@ -107,16 +108,22 @@ VDF file. Nama:
 - picks the most recently used local account;
 - reads and writes `shortcuts.vdf` (Valve's binary KeyValues format) atomically, keeping
   a one-generation backup and preserving fields written by other tools;
-- derives the shortcut app id the same way Steam does — `crc32(exe + name) | 0x80000000` —
-  so artwork can be written under the exact filenames Steam looks for;
+- assigns new VDF shortcuts the conventional deterministic id
+  `crc32(quoted-exe + name) | 0x80000000`, while preserving an existing Steam-assigned
+  id during updates and renames so artwork and play history stay attached;
 - detects an existing entry by target, app id or name and asks what to do rather than
   ever creating a duplicate silently.
 
 Artwork is written to `userdata\<user>\config\grid\` as `<id>.png`, `<id>p.png`,
 `<id>_hero.png`, `<id>_logo.png` and `<id>_icon.png`.
 
-**Steam holds `shortcuts.vdf` in memory and rewrites it on exit.** If Steam is running
-when you add a game, Nama tells you to restart it.
+**Steam holds `shortcuts.vdf` in memory and rewrites it on exit.** Nama therefore refuses
+to add, update, remove, or write artwork until Steam has been exited completely.
+
+The reasoning, alternatives, and private live-integration research are recorded in
+[`docs/steam-integration-research.md`](docs/steam-integration-research.md). Achievement
+support feasibility is covered in
+[`docs/achievement-support-research.md`](docs/achievement-support-research.md).
 
 ## Building
 
@@ -127,6 +134,29 @@ dotnet build
 dotnet test
 dotnet run --project src/Nama.App
 ```
+
+## Releases and installation
+
+Windows releases are distributed as a self-contained installer from the repository's
+[Releases page](https://github.com/YusBera/Nama/releases). Users do not need to install
+the .NET runtime separately. The per-user installer needs no administrator access,
+installs Nama under `%LOCALAPPDATA%\Programs\Nama`, adds a Start menu shortcut, and can
+optionally add the Explorer right-click entries.
+
+Release installers are currently unsigned, so Windows SmartScreen may show an
+unrecognized-publisher warning. Code signing remains a release-hardening task.
+
+Maintainers create a release by pushing a semantic-version tag from `main`:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions verifies the tag, restores and tests the solution, publishes a self-contained
+`win-x64` build, compiles the Inno Setup installer, writes a SHA-256 checksum, and attaches
+both files to a GitHub Release. The detailed checklist is in
+[`docs/releasing.md`](docs/releasing.md).
 
 Launch straight into identification with a path:
 
@@ -157,7 +187,7 @@ src/
   Nama.Storage            settings, search cache, image cache
   Nama.App                WPF UI (views, view models, Explorer integration)
 tests/
-  Nama.Tests              131 tests over normalization, matching, VDF, Steam writes,
+  Nama.Tests              135 tests over normalization, matching, VDF, Steam writes,
                           local metadata extraction and PE icon parsing
 ```
 
@@ -168,7 +198,8 @@ ranking are testable without a network or a Steam install.
 
 Nama is a utility, not a library manager. It deliberately does not do game launching,
 cloud sync, file organization, mod management, or automatic artwork selection without
-confirmation.
+confirmation. Achievement tracking is exploratory work for a possible separate project,
+not part of Nama's immediate release scope.
 
 ## Known limitations
 

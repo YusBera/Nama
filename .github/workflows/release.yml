@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-installer:
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate and export version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tag '$tag' is not a supported semantic version."
+          }
+          "NAMA_VERSION=$($Matches.version)" >> $env:GITHUB_ENV
+
+      - name: Restore
+        run: dotnet restore Nama.slnx
+
+      - name: Test
+        shell: pwsh
+        run: dotnet test Nama.slnx --configuration Release --no-restore -p:Version=$env:NAMA_VERSION
+
+      - name: Restore Windows runtime assets
+        run: dotnet restore src/Nama.App/Nama.App.csproj --runtime win-x64
+
+      - name: Publish self-contained Windows build
+        shell: pwsh
+        run: |
+          dotnet publish src/Nama.App/Nama.App.csproj `
+            --configuration Release `
+            --runtime win-x64 `
+            --self-contained true `
+            --no-restore `
+            -p:Version=$env:NAMA_VERSION `
+            -p:InformationalVersion=$env:NAMA_VERSION `
+            -p:PublishSingleFile=false `
+            -p:PublishTrimmed=false `
+            --output artifacts/publish/win-x64
+
+          if (-not (Test-Path artifacts/publish/win-x64/Nama.exe)) {
+            throw "The published Nama.exe was not produced."
+          }
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) {
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler was not found on the runner."
+          }
+
+          & $iscc "/DMyAppVersion=$env:NAMA_VERSION" installer/Nama.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Create SHA-256 checksum
+        shell: pwsh
+        run: |
+          $installer = "artifacts/installer/Nama-Setup-$env:NAMA_VERSION.exe"
+          if (-not (Test-Path $installer)) { throw "Installer was not produced." }
+
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $installer -Leaf)" |
+            Set-Content "artifacts/installer/Nama-Setup-$env:NAMA_VERSION.sha256.txt" -Encoding ascii
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nama-${{ env.NAMA_VERSION }}-win-x64
+          path: |
+            artifacts/installer/Nama-Setup-${{ env.NAMA_VERSION }}.exe
+            artifacts/installer/Nama-Setup-${{ env.NAMA_VERSION }}.sha256.txt
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(
+            "artifacts/installer/Nama-Setup-$env:NAMA_VERSION.exe",
+            "artifacts/installer/Nama-Setup-$env:NAMA_VERSION.sha256.txt"
+          )
+          $arguments = @(
+            'release', 'create', '${{ github.ref_name }}'
+          ) + $assets + @(
+            '--repo', '${{ github.repository }}',
+            '--title', "Nama $env:NAMA_VERSION",
+            '--generate-notes'
+          )
+          if ($env:NAMA_VERSION.Contains('-')) { $arguments += '--prerelease' }
+
+          & gh @arguments
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
