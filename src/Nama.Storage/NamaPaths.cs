@@ -16,6 +16,9 @@ public static class NamaPaths
 
     public static string SettingsFile => Path.Combine(ConfigDirectory, "settings.json");
 
+    /// <summary>DPAPI-encrypted provider refresh tokens. Kept beside settings, never in the deletable cache.</summary>
+    public static string TokenFile => Path.Combine(ConfigDirectory, "tokens.dat");
+
     public static string SearchCacheDirectory => Path.Combine(CacheDirectory, "search");
 
     public static string ImageCacheDirectory => Path.Combine(CacheDirectory, "images");

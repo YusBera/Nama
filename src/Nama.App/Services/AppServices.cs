@@ -28,7 +28,9 @@ public sealed class AppServices : IDisposable
         ImageCache = new ImageCache(HttpClient);
         ImageLoader = new ImageLoader(ImageCache);
 
-        Providers = new ProviderRegistry(HttpClient, SearchCache, () => _settings);
+        TokenStore = new ProtectedTokenStore();
+
+        Providers = new ProviderRegistry(HttpClient, SearchCache, () => _settings, TokenStore);
         Normalizer = new NameNormalizer();
 
         SteamManager = new SteamManager((url, ct) => ImageCache.GetBytesAsync(url, ct));
@@ -39,6 +41,7 @@ public sealed class AppServices : IDisposable
     public SearchCache SearchCache { get; }
     public ImageCache ImageCache { get; }
     public ImageLoader ImageLoader { get; }
+    public ProtectedTokenStore TokenStore { get; }
     public ProviderRegistry Providers { get; }
     public NameNormalizer Normalizer { get; }
     public SteamManager SteamManager { get; }

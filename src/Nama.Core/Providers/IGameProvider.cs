@@ -50,3 +50,13 @@ public interface IArtworkProvider
         IReadOnlyCollection<ArtworkType> types,
         CancellationToken ct = default);
 }
+
+/// <summary>Optional capability implemented by community providers that accept votes.</summary>
+public interface IArtworkVotingProvider
+{
+    Task<ArtworkVoteResult> VoteAsync(string artworkId, ArtworkVoteValue value, CancellationToken ct = default);
+}
+
+public enum ArtworkVoteValue { Down = -1, None = 0, Up = 1 }
+
+public readonly record struct ArtworkVoteResult(int Upvotes, int Downvotes, double RankScore, ArtworkVoteValue CurrentVote);

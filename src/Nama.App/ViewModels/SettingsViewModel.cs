@@ -1,11 +1,14 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Windows.Input;
 using Microsoft.Win32;
+using System.Windows;
 using Nama.App.Infrastructure;
 using Nama.App.Services;
 using Nama.App.WindowsIntegration;
 using Nama.Providers;
+using Nama.Providers.NamaDb;
 
 namespace Nama.App.ViewModels;
 
@@ -25,10 +28,21 @@ public sealed class SettingsViewModel : ObservableObject
     private bool _contextMenuInstalled;
     private string? _status;
 
+    private CancellationTokenSource? _linkCts;
+    private string? _linkUserCode;
+    private string? _linkStatus;
+    private bool _isLinking;
+
     public SettingsViewModel(AppServices services, Action close)
     {
         _services = services;
         _close = close;
+
+        _services.Providers.NamaDbAuth.LinkChanged += (_, _) => OnPropertyChanged(nameof(IsNamaDbLinked));
+
+        LinkNamaDbCommand = AsyncRelayCommand.Create(LinkNamaDbAsync, () => !IsLinking);
+        CancelNamaDbLinkCommand = RelayCommand.Create(CancelNamaDbLink, () => IsLinking);
+        UnlinkNamaDbCommand = AsyncRelayCommand.Create(UnlinkNamaDbAsync, () => IsNamaDbLinked);
 
         CloseCommand = RelayCommand.Create(Save);
         InstallContextMenuCommand = RelayCommand.Create(InstallContextMenu);
@@ -121,6 +135,38 @@ public sealed class SettingsViewModel : ObservableObject
             ? "On Windows 11 the entry appears under \"Show more options\" (Shift+F10)."
             : "The entry appears when you right-click a game executable or folder.";
 
+    /// <summary>True once this installation holds a NamaDB identity it can renew.</summary>
+    public bool IsNamaDbLinked => _services.Providers.NamaDbAuth.IsLinked;
+
+    /// <summary>The short code the user checks against the page while a link is in flight.</summary>
+    public string? LinkUserCode
+    {
+        get => _linkUserCode;
+        private set => SetProperty(ref _linkUserCode, value);
+    }
+
+    public string? LinkStatus
+    {
+        get => _linkStatus;
+        private set => SetProperty(ref _linkStatus, value);
+    }
+
+    /// <summary>True while Nama is waiting for the browser half of the handshake.</summary>
+    public bool IsLinking
+    {
+        get => _isLinking;
+        private set
+        {
+            if (!SetProperty(ref _isLinking, value)) return;
+            (LinkNamaDbCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+            (CancelNamaDbLinkCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    public ICommand LinkNamaDbCommand { get; }
+    public ICommand CancelNamaDbLinkCommand { get; }
+    public ICommand UnlinkNamaDbCommand { get; }
+
     public ICommand CloseCommand { get; }
     public ICommand InstallContextMenuCommand { get; }
     public ICommand RemoveContextMenuCommand { get; }
@@ -151,6 +197,22 @@ public sealed class SettingsViewModel : ObservableObject
             Providers.Add(new ProviderToggleViewModel(status, enabled =>
             {
                 var settings = _services.Settings;
+                if (status.Id == "namadb" && enabled && settings.NamaDbAdultAcceptedAt is null)
+                {
+                    var answer = MessageBox.Show(
+                        "NamaDB is an unfiltered community artwork catalog intended only for adults. It may contain explicit material. Illegal content remains prohibited.\n\nConfirm that you are 18 or older and want to enable NamaDB.",
+                        "Enable NamaDB (18+)", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                    if (answer != MessageBoxResult.Yes)
+                    {
+                        settings.NamaDbEnabled = false;
+                        settings.SetProviderEnabled(status.Id, false);
+                        _services.SaveSettings(settings);
+                        RefreshProviders();
+                        return;
+                    }
+                    settings.NamaDbAdultAcceptedAt = DateTimeOffset.UtcNow;
+                }
+                if (status.Id == "namadb") settings.NamaDbEnabled = enabled;
                 settings.SetProviderEnabled(status.Id, enabled);
                 _services.SaveSettings(settings);
                 RefreshProviders();
@@ -202,6 +264,59 @@ public sealed class SettingsViewModel : ObservableObject
         _services.ImageCache.Clear();
         RefreshCacheSize();
         Status = "Cached searches and images cleared.";
+    }
+
+    /// <summary>
+    /// Runs the device-link handshake: ask NamaDB for a code pair, open the verification page,
+    /// then poll until the user approves it. Nama never sees the user's Steam credentials.
+    /// </summary>
+    private async Task LinkNamaDbAsync()
+    {
+        var auth = _services.Providers.NamaDbAuth;
+
+        _linkCts?.Dispose();
+        _linkCts = new CancellationTokenSource();
+        var ct = _linkCts.Token;
+
+        IsLinking = true;
+        LinkStatus = "Contacting NamaDB…";
+        try
+        {
+            var link = await auth.StartAsync(ct).ConfigureAwait(true);
+            LinkUserCode = link.UserCode;
+            LinkStatus = "Approve the code in your browser. Nama is waiting…";
+            OpenUrl(link.VerificationUri);
+
+            var result = await auth.WaitForLinkAsync(link, ct).ConfigureAwait(true);
+            LinkStatus = result == DeviceLinkStatus.Linked
+                ? "Nama is linked to your NamaDB account."
+                : "The code expired before it was approved. Try again.";
+        }
+        catch (OperationCanceledException)
+        {
+            LinkStatus = "Linking cancelled.";
+        }
+        catch (HttpRequestException)
+        {
+            LinkStatus = "Could not reach NamaDB.";
+        }
+        finally
+        {
+            LinkUserCode = null;
+            IsLinking = false;
+            OnPropertyChanged(nameof(IsNamaDbLinked));
+            (UnlinkNamaDbCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private void CancelNamaDbLink() => _linkCts?.Cancel();
+
+    private async Task UnlinkNamaDbAsync()
+    {
+        await _services.Providers.NamaDbAuth.SignOutAsync().ConfigureAwait(true);
+        LinkStatus = "Nama is no longer linked to NamaDB.";
+        OnPropertyChanged(nameof(IsNamaDbLinked));
+        (UnlinkNamaDbCommand as AsyncRelayCommand)?.RaiseCanExecuteChanged();
     }
 
     private void OpenUrl(string url)

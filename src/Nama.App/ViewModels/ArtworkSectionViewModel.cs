@@ -4,6 +4,7 @@ using Nama.App.Infrastructure;
 using Nama.App.Services;
 using Nama.Core.Aggregation;
 using Nama.Core.Models;
+using Nama.Core.Providers;
 
 namespace Nama.App.ViewModels;
 
@@ -17,7 +18,7 @@ public sealed class ArtworkSectionViewModel : ObservableObject
     private bool _isExpanded;
     private ArtworkItemViewModel? _selectedItem;
 
-    public ArtworkSectionViewModel(ArtworkSection section, ImageLoader imageLoader)
+    public ArtworkSectionViewModel(ArtworkSection section, ImageLoader imageLoader, IArtworkVotingProvider? voting = null)
     {
         Type = section.Type;
 
@@ -29,7 +30,7 @@ public sealed class ArtworkSectionViewModel : ObservableObject
         // without holding full-resolution bitmaps for every thumbnail.
         var decodeWidth = (int)(width * 2);
 
-        _all = section.Items.Select(a => new ArtworkItemViewModel(a, imageLoader, decodeWidth)).ToList();
+        _all = section.Items.Select(a => new ArtworkItemViewModel(a, imageLoader, decodeWidth, voting)).ToList();
 
         Displayed = new ObservableCollection<ArtworkItemViewModel>(
             _all.Take(ArtworkAggregator.RecommendedCount));

@@ -182,7 +182,7 @@ public sealed class ArtworkViewModel : ObservableObject
 
             foreach (var section in collection.Sections)
             {
-                var viewModel = new ArtworkSectionViewModel(section, _services.ImageLoader);
+                var viewModel = new ArtworkSectionViewModel(section, _services.ImageLoader, _services.Providers.Voting);
                 viewModel.SelectionChanged += (_, _) => OnPropertyChanged(nameof(SelectionSummary));
 
                 // The top result is preselected so the common case is a single click on

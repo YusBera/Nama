@@ -46,6 +46,21 @@ public sealed class Artwork
     /// <summary>Provider-supplied rating/upvotes, if any. Used for recommendation ordering.</summary>
     public double? Score { get; init; }
 
+    /// <summary>Community vote totals when the provider exposes them.</summary>
+    public int? Upvotes { get; init; }
+    public int? Downvotes { get; init; }
+
+    /// <summary>Provider-computed confidence score used for stable community ranking.</summary>
+    public double? ProviderRankScore { get; init; }
+
+    /// <summary>The signed-in user's current vote (-1, 0, or 1), when known.</summary>
+    public int CurrentUserVote { get; set; }
+
+    public bool CanVote { get; init; }
+
+    /// <summary>Provider page containing attribution, reporting, and moderation details.</summary>
+    public string? DetailsUrl { get; init; }
+
     public string? Author { get; init; }
 
     /// <summary>Provider style tag (e.g. <c>alternate</c>, <c>material</c>, <c>white_logo</c>).</summary>
