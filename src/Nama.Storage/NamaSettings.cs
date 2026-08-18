@@ -18,8 +18,13 @@ public sealed class NamaSettings
     /// <summary>Opaque first-party installation identifier issued by NamaDB.</summary>
     public string? NamaDbInstallationId { get; set; }
 
-    /// <summary>Override for development or self-hosted NamaDB deployments.</summary>
-    public string NamaDbApiBaseUrl { get; set; } = "https://api.namadb.org";
+    /// <summary>
+    /// Base URL of the NamaDB instance to talk to. Empty by default, which switches the provider
+    /// off: there is no hosted NamaDB service, so shipping a default host would point every
+    /// installation at a domain this project does not control. Whoever did control it could then
+    /// choose the page Nama opens for Steam sign in. Set this only to an instance you trust.
+    /// </summary>
+    public string NamaDbApiBaseUrl { get; set; } = "";
 
     /// <summary>
     /// SteamGridDB API key. Without it the SteamGridDB provider disables itself and Nama

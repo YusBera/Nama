@@ -43,13 +43,30 @@ public sealed class NamaDbAuthService(HttpClient httpClient, Func<NamaSettings> 
 
     private string BaseUrl => settings().NamaDbApiBaseUrl.TrimEnd('/');
 
+    /// <summary>
+    /// True when <paramref name="baseUrl"/> names an instance worth contacting. Empty means the
+    /// user has not chosen one, and anything that is not absolute http or https is not a server.
+    /// </summary>
+    public static bool IsUsableBaseUrl(string? baseUrl) =>
+        Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
     /// <summary>Requests a code pair. The caller shows the user code and opens the verification page.</summary>
     public async Task<DeviceLink> StartAsync(CancellationToken ct = default)
     {
+        if (!IsUsableBaseUrl(settings().NamaDbApiBaseUrl))
+            throw new InvalidOperationException("Set a NamaDB instance address before linking.");
+
         using var response = await httpClient.PostAsync($"{BaseUrl}/v1/auth/device", content: null, ct).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         var payload = await response.Content.ReadFromJsonAsync<DeviceDto>(ProviderHttp.JsonOptions, ct).ConfigureAwait(false)
             ?? throw new HttpRequestException("NamaDB returned an empty device-link response.");
+
+        // The caller hands this straight to the shell, which will happily open a local path, a
+        // UNC share or any registered protocol handler. Only ever let a real web address through.
+        if (!IsUsableBaseUrl(payload.VerificationUri))
+            throw new HttpRequestException("NamaDB returned a verification address that is not a web page.");
+
         return new DeviceLink(payload.DeviceCode, payload.UserCode, payload.VerificationUri, payload.ExpiresIn);
     }
 

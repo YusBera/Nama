@@ -16,7 +16,11 @@ public sealed class NamaDbProvider(HttpClient httpClient, Func<NamaSettings> set
 {
     public string Id => "namadb";
     public string DisplayName => "NamaDB";
-    public bool IsEnabled => settings().NamaDbEnabled && settings().NamaDbAdultAcceptedAt is not null;
+    // No configured instance means nothing to talk to, so the provider stays off rather than
+    // firing requests at a relative URL or an unintended host.
+    public bool IsEnabled => settings().NamaDbEnabled
+        && settings().NamaDbAdultAcceptedAt is not null
+        && NamaDbAuthService.IsUsableBaseUrl(settings().NamaDbApiBaseUrl);
     public int Priority => 5;
     public IReadOnlyCollection<ArtworkType> SupportedTypes { get; } = ArtworkTypeInfo.SteamApplicable;
 

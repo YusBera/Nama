@@ -71,6 +71,61 @@ public sealed class NamaDbTests : IDisposable
         return (new NamaDbProvider(client, () => settings, Tokens, auth), auth, handler);
     }
 
+    [Theory]
+    [InlineData("https://namadb.example", true)]
+    [InlineData("http://127.0.0.1:8787", true)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData(null, false)]
+    [InlineData("api.namadb.example", false)]
+    [InlineData("file:///C:/Windows", false)]
+    [InlineData("javascript:alert(1)", false)]
+    public void Only_an_absolute_web_address_counts_as_an_instance(string? candidate, bool usable) =>
+        Assert.Equal(usable, NamaDbAuthService.IsUsableBaseUrl(candidate));
+
+    [Fact]
+    public async Task Provider_is_disabled_until_an_instance_is_configured()
+    {
+        // Shipping a default host would aim every installation at a domain this project does not
+        // own, and whoever did own it would choose the page Nama opens for Steam sign in.
+        Assert.False(NamaDbAuthService.IsUsableBaseUrl(new NamaSettings().NamaDbApiBaseUrl));
+
+        var settings = Enabled();
+        settings.NamaDbApiBaseUrl = "";
+        var (provider, auth, handler) = Build(settings, (_, _) => Json(ResolveBody));
+
+        Assert.False(provider.IsEnabled);
+        Assert.Empty(await provider.GetArtworkAsync(Game(), [ArtworkType.Grid]));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => auth.StartAsync());
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("file:///C:/Windows/System32/calc.exe")]
+    [InlineData(@"\\attacker\share\payload.exe")]
+    [InlineData("ms-msdt:/id PCWDiagnostic")]
+    [InlineData("not a uri at all")]
+    public async Task A_verification_address_that_is_not_a_web_page_is_refused(string hostile)
+    {
+        // The settings screen hands this to ShellExecute, which opens local paths, UNC shares and
+        // registered protocol handlers just as readily as it opens a browser.
+        var body = System.Text.Json.JsonSerializer.Serialize(new { deviceCode = "d", userCode = "AAAA-BBBB", verificationUri = hostile, expiresIn = 600 });
+        var (_, auth, _) = Build(Enabled(), (_, _) => Json(body));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => auth.StartAsync());
+    }
+
+    [Fact]
+    public async Task A_normal_verification_address_is_passed_through()
+    {
+        var (_, auth, _) = Build(Enabled(), (_, _) =>
+            Json("""{"deviceCode":"d","userCode":"AAAA-BBBB","verificationUri":"https://namadb.example/link?code=AAAA-BBBB","expiresIn":600}"""));
+
+        var link = await auth.StartAsync();
+        Assert.Equal("https://namadb.example/link?code=AAAA-BBBB", link.VerificationUri);
+        Assert.Equal("AAAA-BBBB", link.UserCode);
+    }
+
     [Fact]
     public async Task Provider_is_disabled_when_the_user_has_not_switched_NamaDb_on()
     {
